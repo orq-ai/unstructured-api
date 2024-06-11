@@ -15,7 +15,7 @@ DOCKER_BUILD_CMD=(docker buildx build --load -f Dockerfile \
   --build-arg PIPELINE_PACKAGE="$PIPELINE_PACKAGE" \
   --progress plain \
   --target code \
-  --cache-from "$DOCKER_REPOSITORY":latest \
+  --no-cache \
   -t "$DOCKER_IMAGE" .)
 
 # only build for specific platform if DOCKER_PLATFORM is set
