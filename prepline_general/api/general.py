@@ -25,7 +25,7 @@ from fastapi import (
     HTTPException,
     Request,
     UploadFile,
-    status,
+    status
 )
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pypdf import PageObject, PdfReader, PdfWriter
@@ -43,9 +43,11 @@ from unstructured.staging.base import (
 )
 from unstructured_inference.models.base import UnknownModelException
 from unstructured_inference.models.chipper import MODEL_TYPES as CHIPPER_MODEL_TYPES
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 router = APIRouter()
+
 
 
 def is_compatible_response_type(media_type: str, response_type: type) -> bool:
@@ -712,13 +714,15 @@ def ungz_file(file: UploadFile, gz_uncompressed_content_type: Optional[str] = No
     )
 
 
+
 @router.get("/general/v0/general", include_in_schema=False)
 @router.get("/general/v0.0.70/general", include_in_schema=False)
 async def handle_invalid_get_request():
-    raise HTTPException(
-        status_code=status.HTTP_405_METHOD_NOT_ALLOWED, detail="Only POST requests are supported."
-    )
+    return {"detail": "GET requests are not supported"}
 
+@router.options("/general/v0/general")
+async def options_general():
+    return {}
 
 @router.post(
     "/general/v0/general",
@@ -739,6 +743,7 @@ def general_partition(
     files: List[UploadFile],
     form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
 ):
+    print("files--1")
     # -- must have a valid API key --
     if api_key_env := os.environ.get("UNSTRUCTURED_API_KEY"):
         api_key = request.headers.get("unstructured-api-key")
@@ -749,6 +754,7 @@ def general_partition(
 
     content_type = request.headers.get("Accept")
 
+    print("files--2")
     # -- detect response content-type conflict when multiple files are uploaded --
     if (
         len(files) > 1
@@ -761,6 +767,7 @@ def general_partition(
             "text/csv",
         ]
     ):
+        print("files--123")
         raise HTTPException(
             detail=f"Conflict in media type {content_type} with response type 'multipart/mixed'.\n",
             status_code=status.HTTP_406_NOT_ACCEPTABLE,

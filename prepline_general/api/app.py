@@ -50,18 +50,15 @@ async def http_error_handler(request: Request, e: HTTPException):
 async def error_handler(request: Request, e: Exception):
     return JSONResponse(status_code=500, content={"detail": str(e)})
 
-
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", None)
-if allowed_origins:
-    from fastapi.middleware.cors import CORSMiddleware
-
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=allowed_origins.split(","),
-        allow_methods=["OPTIONS", "POST"],
-        allow_headers=["Content-Type"],
-    )
-
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 app.include_router(general_router)
 
 set_custom_openapi(app)
