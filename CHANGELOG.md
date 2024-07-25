@@ -1,3 +1,23 @@
+## 0.0.75
+
+* Remove constraint on `safetensors` that preventing us from bumping `transformers`.
+
+## 0.0.74
+
+* Bump to `unstructured` 0.15.0
+
+## 0.0.73
+
+* Bump to `unstructured` 0.14.10
+
+## 0.0.72
+
+* Fix certain filetypes failing mimetype lookup in the new base image
+
+## 0.0.71
+
+* replace rockylinux with chainguard/wolfi as a base image for `amd64`
+
 ## 0.0.70
 
 * Bump to `unstructured` 0.14.6
