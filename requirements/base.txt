@@ -287,7 +287,9 @@ pypdf==4.3.1
     #   unstructured
     #   unstructured-client
 pypdfium2==4.30.0
-    # via pdfplumber
+    # via
+    #   -r requirements/base.in
+    #   pdfplumber
 pytesseract==0.3.10
     # via unstructured
 python-dateutil==2.9.0.post0

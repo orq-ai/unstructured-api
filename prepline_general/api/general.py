@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import TracebackType
 from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
+from unstructured.cleaners.core import group_broken_paragraphs
 
 import backoff
 import pandas as pd
@@ -32,6 +33,7 @@ from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
+from unstructured.partition.text import partition_text
 
 from prepline_general.api.models.form_params import GeneralFormParams
 from prepline_general.api.filetypes import get_validated_mimetype
@@ -48,7 +50,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 router = APIRouter()
-
 
 
 def is_compatible_response_type(media_type: str, response_type: type) -> bool:
@@ -102,12 +103,12 @@ def is_non_retryable(e: Exception) -> bool:
     logger=logger,
 )
 def call_api(
-    request_url: str,
-    api_key: str,
-    filename: str,
-    file: IO[bytes],
-    content_type: str,
-    **partition_kwargs: Any,
+        request_url: str,
+        api_key: str,
+        filename: str,
+        file: IO[bytes],
+        content_type: str,
+        **partition_kwargs: Any,
 ) -> str:
     """Call the api with the given request_url."""
     headers = {"unstructured-api-key": api_key}
@@ -127,11 +128,11 @@ def call_api(
 
 
 def partition_file_via_api(
-    file_tuple: Tuple[IO[bytes], int],
-    request: Request,
-    filename: str,
-    content_type: str,
-    **partition_kwargs: Any,
+        file_tuple: Tuple[IO[bytes], int],
+        request: Request,
+        filename: str,
+        content_type: str,
+        **partition_kwargs: Any,
 ) -> List[Element]:
     """Send the given file to be partitioned remotely with retry logic.
 
@@ -151,7 +152,7 @@ def partition_file_via_api(
 
     api_key = request.headers.get("unstructured-api-key", default="")
     partition_kwargs["starting_page_number"] = (
-        partition_kwargs.get("starting_page_number", 1) + page_offset
+            partition_kwargs.get("starting_page_number", 1) + page_offset
     )
 
     result = call_api(
@@ -166,13 +167,13 @@ def partition_file_via_api(
 
 
 def partition_pdf_splits(
-    request: Request,
-    pdf_pages: Sequence[PageObject],
-    file: IO[bytes],
-    metadata_filename: str,
-    content_type: str,
-    coordinates: bool,
-    **partition_kwargs: Any,
+        request: Request,
+        pdf_pages: Sequence[PageObject],
+        file: IO[bytes],
+        metadata_filename: str,
+        content_type: str,
+        coordinates: bool,
+        **partition_kwargs: Any,
 ) -> List[Element]:
     """Split a pdf into chunks and process in parallel with more api calls.
 
@@ -238,43 +239,43 @@ class ChipperMemoryProtection:
         is_chipper_processing = True
 
     def __exit__(
-        self,
-        exc_type: Optional[type[BaseException]],
-        exc_value: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
+            self,
+            exc_type: Optional[type[BaseException]],
+            exc_value: Optional[BaseException],
+            exc_tb: Optional[TracebackType],
     ):
         global is_chipper_processing
         is_chipper_processing = False
 
 
 def pipeline_api(
-    file: IO[bytes],
-    request: Request,
-    # -- chunking options --
-    chunking_strategy: Optional[str],
-    combine_under_n_chars: Optional[int],
-    max_characters: int,
-    multipage_sections: bool,
-    new_after_n_chars: Optional[int],
-    overlap: int,
-    overlap_all: bool,
-    # ----------------------
-    filename: str = "",
-    file_content_type: Optional[str] = None,
-    response_type: str = "application/json",
-    coordinates: bool = False,
-    encoding: str = "utf-8",
-    hi_res_model_name: Optional[str] = None,
-    include_page_breaks: bool = False,
-    ocr_languages: Optional[List[str]] = None,
-    pdf_infer_table_structure: bool = True,
-    skip_infer_table_types: Optional[List[str]] = None,
-    strategy: str = "auto",
-    xml_keep_tags: bool = False,
-    languages: Optional[List[str]] = None,
-    extract_image_block_types: Optional[List[str]] = None,
-    unique_element_ids: Optional[bool] = False,
-    starting_page_number: Optional[int] = None,
+        file: IO[bytes],
+        request: Request,
+        # -- chunking options --
+        chunking_strategy: Optional[str],
+        combine_under_n_chars: Optional[int],
+        max_characters: int,
+        multipage_sections: bool,
+        new_after_n_chars: Optional[int],
+        overlap: int,
+        overlap_all: bool,
+        # ----------------------
+        filename: str = "",
+        file_content_type: Optional[str] = None,
+        response_type: str = "application/json",
+        coordinates: bool = False,
+        encoding: str = "utf-8",
+        hi_res_model_name: Optional[str] = None,
+        include_page_breaks: bool = False,
+        ocr_languages: Optional[List[str]] = None,
+        pdf_infer_table_structure: bool = True,
+        skip_infer_table_types: Optional[List[str]] = None,
+        strategy: str = "auto",
+        xml_keep_tags: bool = False,
+        languages: Optional[List[str]] = None,
+        extract_image_block_types: Optional[List[str]] = None,
+        unique_element_ids: Optional[bool] = False,
+        starting_page_number: Optional[int] = None,
 ) -> List[Dict[str, Any]] | str:
     if filename.endswith(".msg"):
         # Note(yuming): convert file type for msg files
@@ -283,12 +284,12 @@ def pipeline_api(
 
     # We don't want to keep logging the same params for every parallel call
     is_internal_request = (
-        (
-            request.headers.get("X-Forwarded-For")
-            and str(request.headers.get("X-Forwarded-For")).startswith("10.")
-        )
-        # -- NOTE(scanny): request.client is None in certain testing environments --
-        or (request.client and request.client.host.startswith("10."))
+            (
+                    request.headers.get("X-Forwarded-For")
+                    and str(request.headers.get("X-Forwarded-For")).startswith("10.")
+            )
+            # -- NOTE(scanny): request.client is None in certain testing environments --
+            or (request.client and request.client.host.startswith("10."))
     )
 
     if not is_internal_request:
@@ -407,14 +408,49 @@ def pipeline_api(
             "starting_page_number": starting_page_number,
         }
 
-        if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
-            pdf = PdfReader(file)
-            elements = partition_pdf_splits(
-                request=request,
-                pdf_pages=pdf.pages,
-                coordinates=coordinates,
-                **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
-            )
+        # if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
+        #     pdf = PdfReader(file)
+        #
+        #     print(_count_images_in_pdf(pdf))
+        #
+        #     elements = partition_pdf_splits(
+        #         request=request,
+        #         pdf_pages=pdf.pages,
+        #         coordinates=coordinates,
+        #         **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
+        #     )
+        if file_content_type == "application/pdf":
+            import pypdfium2
+
+            file.seek(0)  # Ensure we're at the start of the file
+            pdf_bytes = file.read()
+
+            pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
+
+            text_list = []
+
+            try:
+                for page_number, page in enumerate(pdf_reader):
+                    text_page = page.get_textpage()
+                    content = text_page.get_text_range()
+                    text_list.append(content)
+                    text_page.close()
+                    page.close()
+                    metadata = {"source": filename, "page": page_number}
+            finally:
+                pdf_reader.close()
+
+            text = "\n\n".join(text_list)
+
+            # Remove the file from the partition_kwargs
+            partition_kwargs.pop("file")
+
+            elements = partition_text(
+                **partition_kwargs,
+                text=text,
+                paragraph_grouper=group_broken_paragraphs,
+                max_partition=max_characters,
+            )  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
         elif hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES:
             with ChipperMemoryProtection():
                 elements = partition(**partition_kwargs)  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
@@ -423,8 +459,8 @@ def pipeline_api(
 
     except OSError as e:
         if isinstance(e.args[0], str) and (
-            "chipper-fast-fine-tuning is not a local folder" in e.args[0]
-            or "ved-fine-tuning is not a local folder" in e.args[0]
+                "chipper-fast-fine-tuning is not a local folder" in e.args[0]
+                or "ved-fine-tuning is not a local folder" in e.args[0]
         ):
             raise HTTPException(
                 status_code=400,
@@ -521,6 +557,16 @@ def _check_pdf(file: IO[bytes]):
         raise HTTPException(status_code=422, detail="File does not appear to be a valid PDF")
 
 
+def _count_images_in_pdf(pdf: PdfReader):
+    image_count = 0
+
+    for page in pdf.pages:
+        for image_file_object in page.images:
+            image_count += 1
+
+    return image_count
+
+
 def _validate_strategy(strategy: str) -> str:
     strategy = strategy.lower()
     strategies = ["fast", "hi_res", "auto", "ocr_only"]
@@ -532,7 +578,7 @@ def _validate_strategy(strategy: str) -> str:
 
 
 def _validate_hi_res_model_name(
-    hi_res_model_name: Optional[str], show_coordinates: bool
+        hi_res_model_name: Optional[str], show_coordinates: bool
 ) -> Optional[str]:
     # Make sure chipper aliases to the latest model
     if hi_res_model_name and hi_res_model_name == "chipper":
@@ -570,7 +616,7 @@ def _validate_chunking_strategy(chunking_strategy: Optional[str]) -> Optional[st
 
 
 def _set_pdf_infer_table_structure(
-    pdf_infer_table_structure: bool, strategy: str, skip_infer_table_types: Optional[List[str]]
+        pdf_infer_table_structure: bool, strategy: str, skip_infer_table_types: Optional[List[str]]
 ) -> bool:
     """Avoids table inference in "fast" and "ocr_only" runs."""
     # NOTE(robinson) - line below is for type checking
@@ -650,15 +696,16 @@ def ungz_file(file: UploadFile, gz_uncompressed_content_type: Optional[str] = No
     )
 
 
-
 @router.get("/general/v0/general", include_in_schema=False)
 @router.get("/general/v0.0.76/general", include_in_schema=False)
 async def handle_invalid_get_request():
     return {"detail": "GET requests are not supported"}
 
+
 @router.options("/general/v0/general")
 async def options_general():
     return {}
+
 
 @router.post(
     "/general/v0/general",
@@ -670,16 +717,15 @@ async def options_general():
 )
 @router.post("/general/v0.0.76/general", include_in_schema=False)
 def general_partition(
-    request: Request,
-    # cannot use annotated type here because of a bug described here:
-    # https://github.com/tiangolo/fastapi/discussions/10280
-    # The openapi metadata must be added separately in openapi.py file.
-    # TODO: Check if the bug is fixed and change the declaration to use Annoteted[List[UploadFile], File(...)]
-    # For new parameters - add them in models/form_params.py
-    files: List[UploadFile],
-    form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
+        request: Request,
+        # cannot use annotated type here because of a bug described here:
+        # https://github.com/tiangolo/fastapi/discussions/10280
+        # The openapi metadata must be added separately in openapi.py file.
+        # TODO: Check if the bug is fixed and change the declaration to use Annoteted[List[UploadFile], File(...)]
+        # For new parameters - add them in models/form_params.py
+        files: List[UploadFile],
+        form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
 ):
-    print("files--1")
     # -- must have a valid API key --
     if api_key_env := os.environ.get("UNSTRUCTURED_API_KEY"):
         api_key = request.headers.get("unstructured-api-key")
@@ -690,20 +736,18 @@ def general_partition(
 
     accept_type = request.headers.get("Accept")
 
-    print("files--2")
     # -- detect response content-type conflict when multiple files are uploaded --
     if (
-        len(files) > 1
-        and accept_type
-        and accept_type
-        not in [
-            "*/*",
-            "multipart/mixed",
-            "application/json",
-            "text/csv",
-        ]
+            len(files) > 1
+            and accept_type
+            and accept_type
+            not in [
+        "*/*",
+        "multipart/mixed",
+        "application/json",
+        "text/csv",
+    ]
     ):
-        print("files--123")
         raise HTTPException(
             detail=f"Conflict in media type {accept_type} with response type 'multipart/mixed'.\n",
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
@@ -767,7 +811,7 @@ def general_partition(
             )
 
     def join_responses(
-        responses: Sequence[str | List[Dict[str, Any]] | PlainTextResponse]
+            responses: Sequence[str | List[Dict[str, Any]] | PlainTextResponse]
     ) -> List[str | List[Dict[str, Any]]] | PlainTextResponse:
         """Consolidate partitionings from multiple documents into single response payload."""
         if form_params.output_format != "text/csv":

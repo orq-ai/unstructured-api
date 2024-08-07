@@ -12,3 +12,4 @@ nbdev
 jupyter
 httpx
 deepdiff
+pypdfium2

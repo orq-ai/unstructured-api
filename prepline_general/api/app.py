@@ -1,12 +1,12 @@
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.datastructures import FormData
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 import logging
 import os
 
 from .general import router as general_router
 from .openapi import set_custom_openapi
+from fastapi.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger("unstructured_api")
 
@@ -50,7 +50,8 @@ async def http_error_handler(request: Request, e: HTTPException):
 async def error_handler(request: Request, e: Exception):
     return JSONResponse(status_code=500, content={"detail": str(e)})
 
-from fastapi.middleware.cors import CORSMiddleware
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,7 +63,6 @@ app.add_middleware(
 app.include_router(general_router)
 
 set_custom_openapi(app)
-
 
 # Note(austin) - When FastAPI parses our FormData params,
 # it builds lists out of duplicate keys, like so:
@@ -103,7 +103,6 @@ async def patched_get_form(
 
 # Replace the private method with our wrapper
 Request._get_form = patched_get_form  # type: ignore[assignment]
-
 
 # Filter out /healthcheck noise
 class HealthCheckFilter(logging.Filter):
