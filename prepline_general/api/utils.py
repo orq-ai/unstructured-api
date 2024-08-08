@@ -1,8 +1,10 @@
 import json
+import re
 from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple
 
 T = TypeVar("T")
 E = TypeVar("E")
+
 
 
 def _cast_to_type(value: Any, origin_class: type) -> Any:
@@ -156,3 +158,25 @@ def count_paragraphs(s: str) -> int:
         int: number of paragraphs in the string
     """
     return len(s.split("\n\n"))
+
+
+def extract_phone_numbers(text):
+    # Updated pattern to include international formats like +34672013593
+    pattern = r'\b(?:\+\d{1,3}[-.\s]?)?(?:\(\d{1,4}\)|\d{1,4})[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b'
+
+    # Find all matches in the text
+    phone_numbers = re.findall(pattern, text)
+
+    return phone_numbers
+
+def extract_credit_card_numbers(text):
+    # Regex pattern for common credit card formats
+    pattern = r'\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{16}\b'
+
+    # Find all matches in the text
+    credit_cards = re.findall(pattern, text)
+
+    # Clean up the results (remove spaces and dashes)
+    cleaned_cards = [re.sub(r'[-\s]', '', card) for card in credit_cards]
+
+    return cleaned_cards
