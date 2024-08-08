@@ -1,5 +1,5 @@
 import json
-from typing import TypeVar, Union, List, Optional, Generic, get_origin, get_args, Type, Any, Tuple
+from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple
 
 T = TypeVar("T")
 E = TypeVar("E")
@@ -108,3 +108,51 @@ class SmartValueParser(Generic[T]):
         origin_args = get_args(type_info)
         container_elems_class = origin_args[0] if origin_args else None
         return origin_class, container_elems_class
+
+
+def count_characters(s: str) -> int:
+    """Count the number of characters in a string
+
+    Args:
+        s (str): string to count characters in
+
+    Returns:
+        int: number of characters in the string
+    """
+    return len(s)
+
+
+def count_words(s: str) -> int:
+    """Count the number of words in a string
+
+    Args:
+        s (str): string to count words in
+
+    Returns:
+        int: number of words in the string
+    """
+    return len(s.split())
+
+
+def count_sentences(s: str) -> int:
+    """Count the number of sentences in a string
+
+    Args:
+        s (str): string to count sentences in
+
+    Returns:
+        int: number of sentences in the string
+    """
+    return s.count(".") + s.count("?") + s.count("!")
+
+
+def count_paragraphs(s: str) -> int:
+    """Count the number of paragraphs in a string
+
+    Args:
+        s (str): string to count paragraphs in
+
+    Returns:
+        int: number of paragraphs in the string
+    """
+    return len(s.split("\n\n"))

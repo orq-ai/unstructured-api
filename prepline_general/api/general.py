@@ -7,18 +7,17 @@ import logging
 import mimetypes
 import os
 import secrets
-import zipfile
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import TracebackType
 from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
-from unstructured.cleaners.core import group_broken_paragraphs
 
 import backoff
 import pandas as pd
 import psutil
 import requests
+import tiktoken
 from fastapi import (
     APIRouter,
     Depends,
@@ -33,12 +32,10 @@ from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
-from unstructured.partition.text import partition_text
-
-from prepline_general.api.models.form_params import GeneralFormParams
-from prepline_general.api.filetypes import get_validated_mimetype
+from unstructured.cleaners.core import group_broken_paragraphs
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
+from unstructured.partition.text import partition_text
 from unstructured.staging.base import (
     convert_to_dataframe,
     convert_to_isd,
@@ -46,10 +43,14 @@ from unstructured.staging.base import (
 )
 from unstructured_inference.models.base import UnknownModelException
 from unstructured_inference.models.chipper import MODEL_TYPES as CHIPPER_MODEL_TYPES
-from fastapi.middleware.cors import CORSMiddleware
+
+from prepline_general.api.filetypes import get_validated_mimetype
+from prepline_general.api.models.form_params import GeneralFormParams, PartitionResponse, PartitionResponseMetadata
+from prepline_general.api.utils import count_words, count_sentences, count_paragraphs, count_characters
 
 app = FastAPI()
 router = APIRouter()
+tokenizer = tiktoken.get_encoding("o200k_base")
 
 
 def is_compatible_response_type(media_type: str, response_type: type) -> bool:
@@ -276,7 +277,7 @@ def pipeline_api(
         extract_image_block_types: Optional[List[str]] = None,
         unique_element_ids: Optional[bool] = False,
         starting_page_number: Optional[int] = None,
-) -> List[Dict[str, Any]] | str:
+) -> PartitionResponse:
     if filename.endswith(".msg"):
         # Note(yuming): convert file type for msg files
         # since fast api might sent the wrong one.
@@ -411,8 +412,6 @@ def pipeline_api(
         # if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
         #     pdf = PdfReader(file)
         #
-        #     print(_count_images_in_pdf(pdf))
-        #
         #     elements = partition_pdf_splits(
         #         request=request,
         #         pdf_pages=pdf.pages,
@@ -436,7 +435,6 @@ def pipeline_api(
                     text_list.append(content)
                     text_page.close()
                     page.close()
-                    metadata = {"source": filename, "page": page_number}
             finally:
                 pdf_reader.close()
 
@@ -450,7 +448,11 @@ def pipeline_api(
                 text=text,
                 paragraph_grouper=group_broken_paragraphs,
                 max_partition=max_characters,
-            )  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
+            )
+
+            for i, element in enumerate(elements):
+                elements[i].metadata.filetype = file_content_type
+
         elif hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES:
             with ChipperMemoryProtection():
                 elements = partition(**partition_kwargs)  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
@@ -504,6 +506,13 @@ def pipeline_api(
 
     # Clean up returned elements
     # Note(austin): pydantic should control this sort of thing for us
+
+    words_count = 0
+    sentences_count = 0
+    paragraphs_count = 0
+    tokens_count = 0
+    characters_count = 0
+
     for i, element in enumerate(elements):
         elements[i].metadata.filename = os.path.basename(filename)
 
@@ -519,13 +528,49 @@ def pipeline_api(
         if element.metadata.detection_class_prob:
             elements[i].metadata.detection_class_prob = None
 
+        if element.metadata.orig_elements:
+            elements[i].metadata.orig_elements = None
+
+        # Add word count to metadata
+        element_words_count = count_words(element.text)
+        elements[i].metadata.words_count = element_words_count
+        words_count += element_words_count
+
+        # Add sentence count to the metadata
+        element_sentence_count = count_sentences(element.text)
+        elements[i].metadata.sentences_count = element_sentence_count
+        sentences_count += element_sentence_count
+
+        # Add paragraph count to the metadata
+        element_paragraph_count = count_paragraphs(element.text)
+        elements[i].metadata.paragraphs_count = element_paragraph_count
+        paragraphs_count += element_paragraph_count
+
+        # Add the token count to the metadata
+        element_tokens_count = len(tokenizer.encode(element.text))
+        elements[i].metadata.tokens_count = element_tokens_count
+        tokens_count += element_tokens_count
+
+        # Add the characters count to the metadata
+        element_characters_count = count_characters(element.text)
+        elements[i].metadata.characters_count = element_characters_count
+        characters_count += element_characters_count
+
     if response_type == "text/csv":
         df = convert_to_dataframe(elements)
         return df.to_csv(index=False)
 
     result = convert_to_isd(elements)
 
-    return result
+    response_metadata = PartitionResponseMetadata(
+        paragraphs_count=paragraphs_count,
+        characters_count=characters_count,
+        tokens_count=tokens_count,
+        sentences_count=sentences_count,
+        words_count=words_count,
+    )
+
+    return PartitionResponse(documents=result, metadata=response_metadata)
 
 
 def _check_free_memory():

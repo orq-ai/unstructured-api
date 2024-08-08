@@ -13,3 +13,4 @@ pypdf
 pycryptodome
 psutil
 pypdfium2
+tiktoken

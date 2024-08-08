@@ -13,3 +13,4 @@ jupyter
 httpx
 deepdiff
 pypdfium2
+tiktoken
