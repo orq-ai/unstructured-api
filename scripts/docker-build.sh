@@ -9,7 +9,7 @@ DOCKER_IMAGE="${DOCKER_IMAGE:-pipeline-family-${PIPELINE_FAMILY}-dev}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 
 DOCKER_REPOSITORY=ghcr.io/orq-ai/unstructured-api
-DOCKER_IMAGE=ghcr.io/orq-ai/unstructured-api:latest
+DOCKER_IMAGE=ghcr.io/orq-ai/unstructured-api:${GIT_COMMIT}
 DOCKER_BUILD_REPOSITORY=ghcr.io/orq-ai/unstructured-api
 PACKAGE="unstructured-api"
 PIPELINE_FAMILY="general"
