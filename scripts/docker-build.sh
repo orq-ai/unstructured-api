@@ -8,6 +8,13 @@ PIP_VERSION="${PIP_VERSION:-22.2.1}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-pipeline-family-${PIPELINE_FAMILY}-dev}"
 DOCKER_PLATFORM="${DOCKER_PLATFORM:-}"
 
+DOCKER_REPOSITORY=ghcr.io/orq-ai/unstructured-api
+DOCKER_IMAGE=ghcr.io/orq-ai/unstructured-api:latest
+DOCKER_BUILD_REPOSITORY=ghcr.io/orq-ai/unstructured-api
+PACKAGE="unstructured-api"
+PIPELINE_FAMILY="general"
+PIP_VERSION="22.2.1"
+PYTHON_VERSION="3.10"
 
 DOCKER_BUILD_CMD=(
   docker buildx build --load -f Dockerfile
