@@ -23,7 +23,7 @@ DOCKER_BUILD_CMD=(
   --build-arg PIP_VERSION="$PIP_VERSION"
   --build-arg BUILDKIT_INLINE_CACHE=1
   --build-arg PIPELINE_PACKAGE="$PIPELINE_PACKAGE"
-  --progress plain
+  --platform linux/amd64
   --cache-from "$DOCKER_REPOSITORY:latest"
   -t "$DOCKER_IMAGE"
   .

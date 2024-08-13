@@ -1,10 +1,10 @@
 import json
 import re
 from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple
+from unstructured.cleaners.extract import extract_email_address
 
 T = TypeVar("T")
 E = TypeVar("E")
-
 
 
 def _cast_to_type(value: Any, origin_class: type) -> Any:
@@ -160,23 +160,64 @@ def count_paragraphs(s: str) -> int:
     return len(s.split("\n\n"))
 
 
-def extract_phone_numbers(text):
+def extract_phone_numbers(text: str):
     # Updated pattern to include international formats like +34672013593
-    pattern = r'\b(?:\+\d{1,3}[-.\s]?)?(?:\(\d{1,4}\)|\d{1,4})[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b'
+    pattern = r"\b(?:\+\d{1,3}[-.\s]?)?(?:\(\d{1,4}\)|\d{1,4})[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b"
 
     # Find all matches in the text
     phone_numbers = re.findall(pattern, text)
 
     return phone_numbers
 
-def extract_credit_card_numbers(text):
+
+def extract_credit_card_numbers(text: str):
     # Regex pattern for common credit card formats
-    pattern = r'\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{16}\b'
+    pattern = r"\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{16}\b"
 
     # Find all matches in the text
     credit_cards = re.findall(pattern, text)
 
     # Clean up the results (remove spaces and dashes)
-    cleaned_cards = [re.sub(r'[-\s]', '', card) for card in credit_cards]
+    cleaned_cards = [re.sub(r"[-\s]", "", card) for card in credit_cards]
 
     return cleaned_cards
+
+
+def clean_emails(text: str) -> str:
+
+    # Extract email addresses from the text
+    emails = extract_email_address(text)
+
+    # Remove the email addresses from the text
+    cleaned_text = text
+
+    for email in emails:
+        cleaned_text = cleaned_text.replace(email, "")
+
+    return cleaned_text
+
+
+def clean_phone_numbers(text: str) -> str:
+    # Extract phone numbers from the text
+    phone_numbers = extract_phone_numbers(text)
+
+    # Remove the phone numbers from the text
+    cleaned_text = text
+
+    for phone in phone_numbers:
+        cleaned_text = cleaned_text.replace(phone, "")
+
+    return cleaned_text
+
+
+def clean_credit_card_numbers(text: str) -> str:
+    # Extract credit card numbers from the text
+    credit_cards = extract_credit_card_numbers(text)
+
+    # Remove the credit card numbers from the text
+    cleaned_text = text
+
+    for card in credit_cards:
+        cleaned_text = cleaned_text.replace(card, "")
+
+    return cleaned_text
