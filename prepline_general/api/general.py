@@ -578,6 +578,8 @@ def pipeline_api(
     tokens_count = 0
     characters_count = 0
 
+    final_elements: list[Element] = []
+
     for i, element in enumerate(elements):
 
         # If the text of the element is empty or length is 0, we don't want to keep it
@@ -639,11 +641,13 @@ def pipeline_api(
         elements[i].metadata.characters_count = element_characters_count
         characters_count += element_characters_count
 
+        final_elements.append(elements[i])
+
     if response_type == "text/csv":
-        df = convert_to_dataframe(elements)
+        df = convert_to_dataframe(final_elements)
         return df.to_csv(index=False)
 
-    result = convert_to_isd(elements)
+    result = convert_to_isd(final_elements)
 
     response_metadata = PartitionResponseMetadata(
         paragraphs_count=paragraphs_count,
