@@ -579,6 +579,12 @@ def pipeline_api(
     characters_count = 0
 
     for i, element in enumerate(elements):
+
+        # If the text of the element is empty or length is 0, we don't want to keep it
+        if not element.text or len(element.text) == 0:
+            elements.pop(i)
+            continue
+
         elements[i].metadata.filename = os.path.basename(filename)
 
         elements[i].text = pipeline_cleanup(
