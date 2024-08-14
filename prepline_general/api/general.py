@@ -288,7 +288,12 @@ def pipeline_cleanup(
         text = clean_phone_numbers(text)
 
     if clean_numbered_list:
-        text = clean_ordered_bullets(text)
+        try:
+            text = clean_ordered_bullets(text)
+        except IndexError:
+            pass
+        except Exception as _:
+            pass
 
     return text
 
