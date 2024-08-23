@@ -263,7 +263,6 @@ def pipeline_cleanup(
     delete_phone_numbers: bool = False,
     clean_bullet_points: bool = False,
     clean_numbered_list: bool = False,
-    clean_unicode: bool = False,
     clean_dashes: bool = False,
     clean_whitespaces: bool = False,
 ) -> str:
@@ -274,9 +273,6 @@ def pipeline_cleanup(
         dashes=clean_dashes,
         extra_whitespace=clean_whitespaces,
     )
-
-    if clean_unicode:
-        text = clean_non_ascii_chars(text)
 
     if delete_emails:
         text = clean_emails(text)
@@ -331,7 +327,6 @@ def pipeline_api(
     delete_phone_numbers: bool = False,
     clean_bullet_points: bool = False,
     clean_numbered_list: bool = False,
-    clean_unicode: bool = False,
     clean_dashes: bool = False,
     clean_whitespaces: bool = False,
 ) -> PartitionResponse:
@@ -382,7 +377,6 @@ def pipeline_api(
                         "delete_phone_numbers": delete_phone_numbers,
                         "clean_bullet_points": clean_bullet_points,
                         "clean_numbered_list": clean_numbered_list,
-                        "clean_unicode": clean_unicode,
                         "clean_dashes": clean_dashes,
                         "clean_whitespaces": clean_whitespaces,
                     },
@@ -596,7 +590,6 @@ def pipeline_api(
             delete_phone_numbers=delete_phone_numbers,
             clean_bullet_points=clean_bullet_points,
             clean_numbered_list=clean_numbered_list,
-            clean_unicode=clean_unicode,
             clean_dashes=clean_dashes,
             clean_whitespaces=clean_whitespaces,
         )
@@ -925,7 +918,6 @@ def general_partition(
                 delete_phone_numbers=form_params.delete_phone_numbers,
                 clean_bullet_points=form_params.clean_bullet_points,
                 clean_numbered_list=form_params.clean_numbered_list,
-                clean_unicode=form_params.clean_unicode,
                 clean_dashes=form_params.clean_dashes,
                 clean_whitespaces=form_params.clean_whitespaces,
             )

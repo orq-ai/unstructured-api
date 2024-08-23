@@ -25,6 +25,7 @@ certifi==2024.7.4
     #   httpcore
     #   httpx
     #   requests
+    #   sentry-sdk
     #   unstructured-client
 cffi==1.16.0
     # via cryptography
@@ -64,7 +65,9 @@ emoji==2.12.1
 et-xmlfile==1.1.0
     # via openpyxl
 fastapi==0.112.0
-    # via -r requirements/base.in
+    # via
+    #   -r requirements/base.in
+    #   sentry-sdk
 filelock==3.15.4
     # via
     #   huggingface-hub
@@ -347,6 +350,8 @@ safetensors==0.4.4
     #   transformers
 scipy==1.14.0
     # via layoutparser
+sentry-sdk[fastapi]==2.13.0
+    # via -r requirements/base.in
 six==1.16.0
     # via
     #   langdetect
@@ -424,6 +429,7 @@ unstructured-pytesseract==0.3.12
 urllib3==2.2.2
     # via
     #   requests
+    #   sentry-sdk
     #   unstructured-client
 uvicorn==0.30.5
     # via -r requirements/base.in

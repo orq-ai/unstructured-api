@@ -41,7 +41,6 @@ class GeneralFormParams(BaseModel):
     delete_phone_numbers: bool
     clean_bullet_points: bool
     clean_numbered_list: bool
-    clean_unicode: bool
     clean_dashes: bool
     clean_whitespaces: bool
 
@@ -289,13 +288,6 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
                 description="If True, will clean and standardize numbered lists in the output. Default: False",
             ),
         ] = False,
-        clean_unicode: Annotated[
-            bool,
-            Form(
-                title="Clean Unicode",
-                description="If True, will clean and normalize Unicode characters in the output. Default: False",
-            ),
-        ] = False,
         clean_dashes: Annotated[
             bool,
             Form(
@@ -342,7 +334,6 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
             delete_phone_numbers=delete_phone_numbers,
             clean_bullet_points=clean_bullet_points,
             clean_numbered_list=clean_numbered_list,
-            clean_unicode=clean_unicode,
             clean_dashes=clean_dashes,
             clean_whitespaces=clean_whitespaces,
         )

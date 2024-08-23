@@ -3,12 +3,41 @@ from fastapi.datastructures import FormData
 from fastapi.responses import JSONResponse
 import logging
 import os
+import sentry_sdk
 
 from .general import router as general_router
 from .openapi import set_custom_openapi
 from fastapi.middleware.cors import CORSMiddleware
+from sentry_sdk.integrations.starlette import StarletteIntegration
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 logger = logging.getLogger("unstructured_api")
+
+
+sentry_sdk.init(
+    environment=os.environ.get("ENVIRONMENT", "localhost"),
+    dsn=os.environ.get(
+        "SENTRY_DSN",
+        "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
+    ),
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=1.0,
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    # We recommend adjusting this value in production.
+    profiles_sample_rate=1.0,
+    integrations=[
+        StarletteIntegration(
+            transaction_style="endpoint",
+            failed_request_status_codes=[403, range(500, 599)],
+        ),
+        FastApiIntegration(
+            transaction_style="endpoint",
+            failed_request_status_codes=[403, range(500, 599)],
+        ),
+    ],
+)
 
 app = FastAPI(
     title="Unstructured Pipeline API",
@@ -34,7 +63,8 @@ app = FastAPI(
 # Note(austin) - This logger just dumps exceptions
 # We'd rather handle those below, so disable this in deployments
 uvicorn_logger = logging.getLogger("uvicorn.error")
-if os.environ.get("ENV") in ["dev", "prod"]:
+
+if os.environ.get("ENVIRONMENT") in ["staging", "production"]:
     uvicorn_logger.disabled = True
 
 
@@ -49,7 +79,6 @@ async def http_error_handler(request: Request, e: HTTPException):
 @app.exception_handler(Exception)
 async def error_handler(request: Request, e: Exception):
     return JSONResponse(status_code=500, content={"detail": str(e)})
-
 
 
 app.add_middleware(
@@ -103,6 +132,7 @@ async def patched_get_form(
 
 # Replace the private method with our wrapper
 Request._get_form = patched_get_form  # type: ignore[assignment]
+
 
 # Filter out /healthcheck noise
 class HealthCheckFilter(logging.Filter):
