@@ -10,6 +10,7 @@ from .openapi import set_custom_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
+from .pdf_extractor import router as pdf_extractor_router
 
 logger = logging.getLogger("unstructured_api")
 
@@ -57,7 +58,7 @@ app = FastAPI(
             "x-speakeasy-server-id": "local",
         },
     ],
-    openapi_tags=[{"name": "general"}],
+    openapi_tags=[{"name": "general"}, {"name": "pdf_extractor"}],
 )
 
 # Note(austin) - This logger just dumps exceptions
@@ -90,6 +91,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 app.include_router(general_router)
+app.include_router(pdf_extractor_router, prefix="/pdf", tags=["pdf_extractor"])
 
 set_custom_openapi(app)
 

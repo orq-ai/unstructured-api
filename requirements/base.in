@@ -14,4 +14,7 @@ pycryptodome
 psutil
 pypdfium2
 tiktoken
+minio
+motor
+pymongo
 sentry-sdk[fastapi]
