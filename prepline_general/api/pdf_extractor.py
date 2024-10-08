@@ -97,7 +97,7 @@ async def get_pdf_content(
 
         os.unlink(temp_file.name)  # Delete the temporary file
 
-        return {"content": content}
+        return {"content": content, "file_id": request.file_id, "file_name": file_name, "object_name": object_name}
     except Exception as e:
         sentry_sdk.capture_message("Error processing PDF")
         sentry_sdk.capture_exception(e)
