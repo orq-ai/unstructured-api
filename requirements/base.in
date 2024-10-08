@@ -18,3 +18,4 @@ minio
 motor
 pymongo
 sentry-sdk[fastapi]
+python-dotenv

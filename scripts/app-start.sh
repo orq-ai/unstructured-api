@@ -26,7 +26,8 @@ ${OPTIONAL_TIMEOUT} \
     --log-config logger_config.yaml \
     --host 0.0.0.0 \
     --port "$PORT" \
-    --reload
+    --reload \
+    --env-file .env
 
 echo "Server was shutdown"
 [ -n "$MAX_LIFETIME_SECONDS" ] && echo "Reached timeout of $MAX_LIFETIME_SECONDS seconds"

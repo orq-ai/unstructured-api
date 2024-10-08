@@ -24,12 +24,9 @@ from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
-from unstructured.cleaners.core import group_broken_paragraphs
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
-from unstructured.partition.text import partition_text
 from unstructured.partition.pdf import partition_pdf
-from unstructured.partition.utils.constants import PartitionStrategy
 from unstructured.staging.base import (
     convert_to_dataframe,
     convert_to_isd,
@@ -38,7 +35,7 @@ from unstructured.staging.base import (
 from unstructured_inference.models.base import UnknownModelException
 from unstructured_inference.models.chipper import MODEL_TYPES as CHIPPER_MODEL_TYPES
 
-from unstructured.cleaners.core import clean, clean_non_ascii_chars, clean_ordered_bullets
+from unstructured.cleaners.core import clean, clean_ordered_bullets
 
 
 from prepline_general.api.filetypes import get_validated_mimetype

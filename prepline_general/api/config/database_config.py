@@ -13,8 +13,8 @@ class FileDocument(TypedDict):
     object_name: str
     purpose: FilesPurposes
     bytes: int
-    fileName: str
-    fileId: str
+    file_name: str
+    file_id: str
 
 # Synchronous function
 def get_database() -> Collection[FileDocument]:

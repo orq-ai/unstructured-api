@@ -91,7 +91,7 @@ app.add_middleware(
     expose_headers=["*"],
 )
 app.include_router(general_router)
-app.include_router(pdf_extractor_router, prefix="/pdf", tags=["pdf_extractor"])
+app.include_router(pdf_extractor_router, prefix="/extract", tags=["extract"])
 
 set_custom_openapi(app)
 
