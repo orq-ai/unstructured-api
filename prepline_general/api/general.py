@@ -26,7 +26,8 @@ from starlette.datastructures import Headers
 from starlette.types import Send
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
-from unstructured.partition.pdf import partition_pdf
+from unstructured.cleaners.core import group_broken_paragraphs
+from unstructured.partition.text import partition_text
 from unstructured.staging.base import (
     convert_to_dataframe,
     convert_to_isd,
@@ -476,43 +477,43 @@ def pipeline_api(
         #         coordinates=coordinates,
         #         **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
         #     )
+        # if file_content_type == "application/pdf":
+        #     elements = partition_pdf(**partition_kwargs)
+
         if file_content_type == "application/pdf":
-            elements = partition_pdf(**partition_kwargs)
+            import pypdfium2
 
-        # elif file_content_type == "application/pdf":
-        #     import pypdfium2
+            file.seek(0)  # Ensure we're at the start of the file
+            pdf_bytes = file.read()
 
-        #     file.seek(0)  # Ensure we're at the start of the file
-        #     pdf_bytes = file.read()
+            pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
 
-        #     pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
+            text_list: List[str] = []
 
-        #     text_list: List[str] = []
+            try:
+                for _, page in enumerate(pdf_reader):
+                    text_page = page.get_textpage()
+                    content = text_page.get_text_range()
+                    text_list.append(content)
+                    text_page.close()
+                    page.close()
+            finally:
+                pdf_reader.close()
 
-        #     try:
-        #         for _, page in enumerate(pdf_reader):
-        #             text_page = page.get_textpage()
-        #             content = text_page.get_text_range()
-        #             text_list.append(content)
-        #             text_page.close()
-        #             page.close()
-        #     finally:
-        #         pdf_reader.close()
+            text = "\n\n".join(text_list)
 
-        #     text = "\n\n".join(text_list)
+            # Remove the file from the partition_kwargs
+            partition_kwargs.pop("file")
 
-        #     # Remove the file from the partition_kwargs
-        #     partition_kwargs.pop("file")
+            elements = partition_text(
+                **partition_kwargs,
+                text=text,
+                paragraph_grouper=group_broken_paragraphs,
+                max_partition=max_characters,
+            )
 
-        #     elements = partition_text(
-        #         **partition_kwargs,
-        #         text=text,
-        #         paragraph_grouper=group_broken_paragraphs,
-        #         max_partition=max_characters,
-        #     )
-
-        #     for i, element in enumerate(elements):
-        #         elements[i].metadata.filetype = file_content_type
+            for i, element in enumerate(elements):
+                elements[i].metadata.filetype = file_content_type
 
         elif hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES:
             with ChipperMemoryProtection():
