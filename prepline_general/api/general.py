@@ -24,10 +24,12 @@ from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
+from unstructured.cleaners.core import group_broken_paragraphs
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
-from unstructured.cleaners.core import group_broken_paragraphs
 from unstructured.partition.text import partition_text
+from unstructured.partition.pdf import partition_pdf
+from unstructured.partition.utils.constants import PartitionStrategy
 from unstructured.staging.base import (
     convert_to_dataframe,
     convert_to_isd,
@@ -36,7 +38,7 @@ from unstructured.staging.base import (
 from unstructured_inference.models.base import UnknownModelException
 from unstructured_inference.models.chipper import MODEL_TYPES as CHIPPER_MODEL_TYPES
 
-from unstructured.cleaners.core import clean, clean_ordered_bullets
+from unstructured.cleaners.core import clean, clean_non_ascii_chars, clean_ordered_bullets
 
 
 from prepline_general.api.filetypes import get_validated_mimetype
@@ -477,43 +479,43 @@ def pipeline_api(
         #         coordinates=coordinates,
         #         **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
         #     )
-        # if file_content_type == "application/pdf":
-        #     elements = partition_pdf(**partition_kwargs)
-
         if file_content_type == "application/pdf":
-            import pypdfium2
+            elements = partition_pdf(**partition_kwargs, strategy='fast')
 
-            file.seek(0)  # Ensure we're at the start of the file
-            pdf_bytes = file.read()
+        # elif file_content_type == "application/pdf":
+        #     import pypdfium2
 
-            pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
+        #     file.seek(0)  # Ensure we're at the start of the file
+        #     pdf_bytes = file.read()
 
-            text_list: List[str] = []
+        #     pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
 
-            try:
-                for _, page in enumerate(pdf_reader):
-                    text_page = page.get_textpage()
-                    content = text_page.get_text_range()
-                    text_list.append(content)
-                    text_page.close()
-                    page.close()
-            finally:
-                pdf_reader.close()
+        #     text_list: List[str] = []
 
-            text = "\n\n".join(text_list)
+        #     try:
+        #         for _, page in enumerate(pdf_reader):
+        #             text_page = page.get_textpage()
+        #             content = text_page.get_text_range()
+        #             text_list.append(content)
+        #             text_page.close()
+        #             page.close()
+        #     finally:
+        #         pdf_reader.close()
 
-            # Remove the file from the partition_kwargs
-            partition_kwargs.pop("file")
+        #     text = "\n\n".join(text_list)
 
-            elements = partition_text(
-                **partition_kwargs,
-                text=text,
-                paragraph_grouper=group_broken_paragraphs,
-                max_partition=max_characters,
-            )
+        #     # Remove the file from the partition_kwargs
+        #     partition_kwargs.pop("file")
 
-            for i, element in enumerate(elements):
-                elements[i].metadata.filetype = file_content_type
+        #     elements = partition_text(
+        #         **partition_kwargs,
+        #         text=text,
+        #         paragraph_grouper=group_broken_paragraphs,
+        #         max_partition=max_characters,
+        #     )
+
+        #     for i, element in enumerate(elements):
+        #         elements[i].metadata.filetype = file_content_type
 
         elif hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES:
             with ChipperMemoryProtection():
