@@ -329,6 +329,7 @@ def pipeline_api(
     clean_numbered_list: bool = False,
     clean_dashes: bool = False,
     clean_whitespaces: bool = False,
+    include_slide_notes: Optional[bool] = True,
 ) -> PartitionResponse:
     if filename.endswith(".msg"):
         # Note(yuming): convert file type for msg files
@@ -466,6 +467,7 @@ def pipeline_api(
             "extract_image_block_to_payload": extract_image_block_to_payload,
             "unique_element_ids": unique_element_ids,
             "starting_page_number": starting_page_number,
+            "include_slide_notes": include_slide_notes,
         }
 
         # if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
@@ -823,7 +825,7 @@ async def handle_invalid_get_request():
 
 
 @router.options("/general/v0/general")
-async def options_general():
+async def options_general() -> Dict[str, str]:
     return {}
 
 
@@ -904,7 +906,7 @@ def general_partition(
                 strategy=form_params.strategy,
                 xml_keep_tags=form_params.xml_keep_tags,
                 response_type=form_params.output_format,
-                filename=str(file.filename),
+                filename=str(file.filename) if file.filename else "",
                 file_content_type=file_content_type,
                 languages=form_params.languages,
                 extract_image_block_types=form_params.extract_image_block_types,
