@@ -10,7 +10,6 @@ import secrets
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from types import TracebackType
 from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
 
 import backoff
@@ -26,7 +25,6 @@ from starlette.datastructures import Headers
 from starlette.types import Send
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
-from unstructured.partition.pdf import partition_pdf
 from unstructured.partition.utils.constants import PartitionStrategy
 from unstructured.staging.base import (
     convert_to_dataframe,
@@ -34,9 +32,7 @@ from unstructured.staging.base import (
     elements_from_json,
 )
 from unstructured_inference.models.base import UnknownModelException
-from unstructured_inference.models.chipper import MODEL_TYPES as CHIPPER_MODEL_TYPES
 
-from unstructured.cleaners.core import clean, clean_ordered_bullets
 
 
 from prepline_general.api.filetypes import get_validated_mimetype
@@ -46,9 +42,6 @@ from prepline_general.api.models.form_params import (
     PartitionResponseMetadata,
 )
 from prepline_general.api.utils import (
-    clean_credit_card_numbers,
-    clean_emails,
-    clean_phone_numbers,
     count_words,
     count_sentences,
     count_paragraphs,
@@ -147,7 +140,7 @@ def partition_file_via_api(
     The remote url is set by the `UNSTRUCTURED_PARALLEL_MODE_URL` environment variable.
 
     Args:
-    `file_tuple` is a file-like object and byte offset of a page (file, page_offest)
+    `file_tuple` is a file-like object and byte offset of a page (file, page_offset)
     `request` is used to forward the api key header
     `filename` and `content_type` are passed in the file form data
     `partition_kwargs` holds any form parameters to be sent on
@@ -223,75 +216,6 @@ def partition_pdf_splits(
             results.extend(result)
 
     return results
-
-
-is_chipper_processing = False
-
-
-class ChipperMemoryProtection:
-    """Chipper calls are expensive, and right now we can only do one call at a time.
-
-    If the model is in use, return a 503 error. The API should scale up and the user can try again
-    on a different server.
-    """
-
-    def __enter__(self):
-        global is_chipper_processing
-        if is_chipper_processing:
-            # Log here so we can track how often it happens
-            logger.error("Chipper is already is use")
-            raise HTTPException(
-                status_code=503, detail="Server is under heavy load. Please try again later."
-            )
-
-        is_chipper_processing = True
-
-    def __exit__(
-        self,
-        exc_type: Optional[type[BaseException]],
-        exc_value: Optional[BaseException],
-        exc_tb: Optional[TracebackType],
-    ):
-        global is_chipper_processing
-        is_chipper_processing = False
-
-
-def pipeline_cleanup(
-    text: str,
-    delete_emails: bool = False,
-    delete_credit_cards: bool = False,
-    delete_phone_numbers: bool = False,
-    clean_bullet_points: bool = False,
-    clean_numbered_list: bool = False,
-    clean_dashes: bool = False,
-    clean_whitespaces: bool = False,
-) -> str:
-
-    text = clean(
-        text=text,
-        bullets=clean_bullet_points,
-        dashes=clean_dashes,
-        extra_whitespace=clean_whitespaces,
-    )
-
-    if delete_emails:
-        text = clean_emails(text)
-
-    if delete_credit_cards:
-        text = clean_credit_card_numbers(text)
-
-    if delete_phone_numbers:
-        text = clean_phone_numbers(text)
-
-    if clean_numbered_list:
-        try:
-            text = clean_ordered_bullets(text)
-        except IndexError:
-            pass
-        except Exception as _:
-            pass
-
-    return text
 
 
 def pipeline_api(
@@ -380,6 +304,7 @@ def pipeline_api(
                         "clean_numbered_list": clean_numbered_list,
                         "clean_dashes": clean_dashes,
                         "clean_whitespaces": clean_whitespaces,
+                        "include_slide_notes": include_slide_notes,
                     },
                     default=str,
                 )
@@ -393,7 +318,6 @@ def pipeline_api(
     if file_content_type == "application/pdf":
         _check_pdf(file)
 
-    hi_res_model_name = _validate_hi_res_model_name(hi_res_model_name, coordinates)
     strategy = _validate_strategy(strategy)
     pdf_infer_table_structure = _set_pdf_infer_table_structure(
         pdf_infer_table_structure,
@@ -437,6 +361,7 @@ def pipeline_api(
                         "extract_image_block_types": extract_image_block_types,
                         "extract_image_block_to_payload": extract_image_block_to_payload,
                         "unique_element_ids": unique_element_ids,
+                        "include_slide_notes": include_slide_notes,
                     },
                     default=str,
                 )
@@ -470,58 +395,19 @@ def pipeline_api(
             "include_slide_notes": include_slide_notes,
         }
 
-        # if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
-        #     pdf = PdfReader(file)
-        #
-        #     elements = partition_pdf_splits(
-        #         request=request,
-        #         pdf_pages=pdf.pages,
-        #         coordinates=coordinates,
-        #         **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
-        #     )
-        if file_content_type == "application/pdf":
+        if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
+            pdf = PdfReader(file)
             partition_kwargs['strategy'] = PartitionStrategy.FAST
+            elements = partition_pdf_splits(
+                request=request,
+                pdf_pages=pdf.pages,
+                coordinates=coordinates,
+                **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
+            )
+        # if file_content_type == "application/pdf":
+        #     partition_kwargs['strategy'] = PartitionStrategy.FAST
 
-            elements = partition_pdf(**partition_kwargs)
-
-        # elif file_content_type == "application/pdf":
-        #     import pypdfium2
-
-        #     file.seek(0)  # Ensure we're at the start of the file
-        #     pdf_bytes = file.read()
-
-        #     pdf_reader = pypdfium2.PdfDocument(pdf_bytes, autoclose=True)
-
-        #     text_list: List[str] = []
-
-        #     try:
-        #         for _, page in enumerate(pdf_reader):
-        #             text_page = page.get_textpage()
-        #             content = text_page.get_text_range()
-        #             text_list.append(content)
-        #             text_page.close()
-        #             page.close()
-        #     finally:
-        #         pdf_reader.close()
-
-        #     text = "\n\n".join(text_list)
-
-        #     # Remove the file from the partition_kwargs
-        #     partition_kwargs.pop("file")
-
-        #     elements = partition_text(
-        #         **partition_kwargs,
-        #         text=text,
-        #         paragraph_grouper=group_broken_paragraphs,
-        #         max_partition=max_characters,
-        #     )
-
-        #     for i, element in enumerate(elements):
-        #         elements[i].metadata.filetype = file_content_type
-
-        elif hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES:
-            with ChipperMemoryProtection():
-                elements = partition(**partition_kwargs)  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
+        #     elements = partition_pdf(**partition_kwargs)
         else:
             elements = partition(**partition_kwargs)  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
 
@@ -699,21 +585,6 @@ def _validate_strategy(strategy: str) -> str:
     return strategy
 
 
-def _validate_hi_res_model_name(
-    hi_res_model_name: Optional[str], show_coordinates: bool
-) -> Optional[str]:
-    # Make sure chipper aliases to the latest model
-    if hi_res_model_name and hi_res_model_name == "chipper":
-        hi_res_model_name = "chipperv2"
-
-    if hi_res_model_name and hi_res_model_name in CHIPPER_MODEL_TYPES and show_coordinates:
-        raise HTTPException(
-            status_code=400,
-            detail=f"coordinates aren't available when using the {hi_res_model_name} model type",
-        )
-    return hi_res_model_name
-
-
 def _validate_chunking_strategy(chunking_strategy: Optional[str]) -> Optional[str]:
     """Raise on `chunking_strategy` is not a valid chunking strategy name.
 
@@ -789,7 +660,7 @@ class MultipartMixedResponse(StreamingResponse):
         )
         async for chunk in self.body_iterator:
             if not isinstance(chunk, bytes):
-                chunk = chunk.encode(self.charset)
+                chunk = chunk.encode(self.charset)  # type: ignore
                 chunk = b64encode(chunk)
             await send(
                 {"type": "http.response.body", "body": self.build_part(chunk), "more_body": True}
@@ -819,7 +690,7 @@ def ungz_file(file: UploadFile, gz_uncompressed_content_type: Optional[str] = No
 
 
 @router.get("/general/v0/general", include_in_schema=False)
-@router.get("/general/v0.0.76/general", include_in_schema=False)
+@router.get("/general/v0.0.82/general", include_in_schema=False)
 async def handle_invalid_get_request():
     return {"detail": "GET requests are not supported"}
 
@@ -837,13 +708,13 @@ async def options_general() -> Dict[str, str]:
     description="Description",
     operation_id="partition_parameters",
 )
-@router.post("/general/v0.0.76/general", include_in_schema=False)
+@router.post("/general/v0.0.82/general", include_in_schema=False)
 def general_partition(
     request: Request,
     # cannot use annotated type here because of a bug described here:
     # https://github.com/tiangolo/fastapi/discussions/10280
     # The openapi metadata must be added separately in openapi.py file.
-    # TODO: Check if the bug is fixed and change the declaration to use Annoteted[List[UploadFile], File(...)]
+    # TODO: Check if the bug is fixed and change the declaration to use Annotated[List[UploadFile], File(...)]
     # For new parameters - add them in models/form_params.py
     files: List[UploadFile],
     form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
@@ -927,6 +798,7 @@ def general_partition(
                 clean_numbered_list=form_params.clean_numbered_list,
                 clean_dashes=form_params.clean_dashes,
                 clean_whitespaces=form_params.clean_whitespaces,
+                include_slide_notes=form_params.include_slide_notes,
             )
 
             yield (

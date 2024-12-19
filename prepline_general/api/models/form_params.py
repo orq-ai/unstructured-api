@@ -43,6 +43,7 @@ class GeneralFormParams(BaseModel):
     clean_numbered_list: bool
     clean_dashes: bool
     clean_whitespaces: bool
+    include_slide_notes: bool
 
     @classmethod
     def as_form(
@@ -162,7 +163,7 @@ class GeneralFormParams(BaseModel):
                 description="The strategy to use for partitioning PDF/image. Options are fast, hi_res, auto. Default: auto",
                 examples=["auto", "hi_res"],
             ),
-            BeforeValidator(SmartValueParser[str]().value_or_first_element),
+            BeforeValidator(SmartValueParser[str]().literal_value_stripped_or_first_element),
         ] = "auto",
         extract_image_block_types: Annotated[
             List[str],
@@ -302,6 +303,17 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
                 description="If True, will clean and normalize whitespace in the output. Default: False",
             ),
         ] = False,
+        include_slide_notes: Annotated[
+            bool,
+            Form(
+                title="include_slide_notes",
+                description=(
+                    "When `True`, slide notes from .ppt and .pptx files"
+                    " will be included in the response. Default: `True`"
+                ),
+                example=False,
+            ),
+        ] = True,
     ) -> "GeneralFormParams":
         return cls(
             xml_keep_tags=xml_keep_tags,
@@ -336,6 +348,7 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
             clean_numbered_list=clean_numbered_list,
             clean_dashes=clean_dashes,
             clean_whitespaces=clean_whitespaces,
+            include_slide_notes=include_slide_notes,
         )
 
 

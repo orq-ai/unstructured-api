@@ -1,9 +1,7 @@
 import io
 import os
 import tempfile
-import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import ANY, Mock
 
@@ -701,6 +699,7 @@ def test_parallel_mode_passes_params(monkeypatch):
             "new_after_n_chars": "1501",
             "overlap": "25",
             "overlap_all": "true",
+            "include_slide_notes": "true",
         },
     )
 
@@ -733,6 +732,7 @@ def test_parallel_mode_passes_params(monkeypatch):
         new_after_n_chars=1501,
         overlap=25,
         overlap_all=True,
+        include_slide_notes=True,
     )
 
 
@@ -872,7 +872,7 @@ def test_chunking_strategy_param():
 
 
 # Defaults:
-# multippage = True, combine_text_under_n_chars = None, new_after_n_chars = None,
+# multipage = True, combine_text_under_n_chars = None, new_after_n_chars = None,
 # max_characters = 500
 @pytest.mark.parametrize(
     ("multipage_sections", "combine_under_n_chars", "new_after_n_chars", "max_characters"),
@@ -977,42 +977,6 @@ def test_general_api_returns_400_bad_json(tmpdir):
     )
     assert "Unstructured schema" in response.json().get("detail")
     assert response.status_code == 400
-
-
-def test_chipper_memory_protection(monkeypatch, mocker):
-    """
-    For now, only 1 Chipper call is allowed at a time.
-    Assert that we return a 503 while it's in use.
-    """
-
-    def mock_partition(*args, **kwargs):
-        time.sleep(2)
-        return {}
-
-    monkeypatch.setattr(
-        general,
-        "partition",
-        mock_partition,
-    )
-
-    client = TestClient(app)
-    test_file = Path("sample-docs") / "layout-parser-paper-fast.pdf"
-
-    def make_request(*args):
-        return client.post(
-            MAIN_API_ROUTE,
-            files=[("files", (str(test_file), open(test_file, "rb"), "application/pdf"))],
-            data={"strategy": "hi_res", "hi_res_model_name": "chipper"},
-        )
-
-    with ThreadPoolExecutor() as executor:
-        responses = list(executor.map(make_request, range(3)))
-
-        status_codes = [response.status_code for response in responses]
-
-        # Assert only one call got through
-        assert status_codes.count(200) == 1
-        assert status_codes.count(503) == 2
 
 
 def test_invalid_strategy_for_image_file():
@@ -1147,3 +1111,38 @@ def test__set_pdf_infer_table_structure(
         )
         is expected
     )
+
+
+@pytest.mark.parametrize(
+    ("test_default", "include_slide_notes", "test_file"),
+    [
+        (True, None, Path("sample-docs") / "notes.ppt"),
+        (True, None, Path("sample-docs") / "notes.pptx"),
+        (False, True, Path("sample-docs") / "notes.ppt"),
+        (False, True, Path("sample-docs") / "notes.pptx"),
+        (False, False, Path("sample-docs") / "notes.ppt"),
+        (False, False, Path("sample-docs") / "notes.pptx"),
+    ],
+)
+def test_include_slide_notes(monkeypatch, test_default, include_slide_notes, test_file):
+    """
+    Verifies that the output includes slide notes when the include_slide_notes parameter
+    is left as default or explicitly set to True.
+    """
+    client = TestClient(app)
+    data = (
+        {"output_format": "text/csv"}
+        if test_default
+        else {"include_slide_notes": str(include_slide_notes), "output_format": "text/csv"}
+    )
+    response = client.post(
+        MAIN_API_ROUTE,
+        files=[("files", (str(test_file), open(test_file, "rb")))],
+        data=data,
+    )
+    df = pd.read_csv(io.StringIO(response.text))
+
+    if include_slide_notes or test_default:
+        assert "Here are important notes" == df["text"][0]
+    else:
+        assert "Here are important notes" != df["text"][0]

@@ -43,7 +43,7 @@ sentry_sdk.init(
 app = FastAPI(
     title="Unstructured Pipeline API",
     summary="Partition documents with the Unstructured library",
-    version="0.0.76",
+    version="0.0.82",
     docs_url="/general/docs",
     openapi_url="/general/openapi.json",
     servers=[
