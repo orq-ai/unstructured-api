@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-export PORT=${PORT:-8000}
+export PORT=${PORT:-8200}
 export WORKERS=${WORKERS:-1}
 
 NUMREGEX="^[0-9]+$"
