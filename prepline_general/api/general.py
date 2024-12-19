@@ -11,6 +11,7 @@ from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
+from unstructured.cleaners.core import clean
 
 import backoff
 import pandas as pd
@@ -40,8 +41,11 @@ from prepline_general.api.models.form_params import (
     GeneralFormParams,
     PartitionResponse,
     PartitionResponseMetadata,
-)
+) 
 from prepline_general.api.utils import (
+    clean_credit_card_numbers,
+    clean_emails,
+    clean_phone_numbers,
     count_words,
     count_sentences,
     count_paragraphs,
@@ -165,6 +169,35 @@ def partition_file_via_api(
         **partition_kwargs,
     )
     return elements_from_json(text=result)
+
+def pipeline_cleanup(
+    text: str,
+    delete_emails: bool = False,
+    delete_credit_cards: bool = False,
+    delete_phone_numbers: bool = False,
+    clean_bullet_points: bool = False,
+    clean_numbered_list: bool = False,
+    clean_dashes: bool = False,
+    clean_whitespaces: bool = False,
+) -> str:
+
+    text = clean(
+        text=text,
+        bullets=clean_bullet_points,
+        dashes=clean_dashes,
+        extra_whitespace=clean_whitespaces,
+    )
+
+    if delete_emails:
+        text = clean_emails(text)
+
+    if delete_credit_cards:
+        text = clean_credit_card_numbers(text)
+
+    if delete_phone_numbers:
+        text = clean_phone_numbers(text)
+
+    return text
 
 
 def partition_pdf_splits(
