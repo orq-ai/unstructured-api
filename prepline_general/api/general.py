@@ -350,6 +350,7 @@ def pipeline_api(
 
     if file_content_type == "application/pdf":
         _check_pdf(file)
+        file.seek(0)
 
     strategy = _validate_strategy(strategy)
     pdf_infer_table_structure = _set_pdf_infer_table_structure(
