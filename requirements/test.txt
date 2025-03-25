@@ -803,7 +803,7 @@ starlette==0.38.6
     # via
     #   -r requirements/base.txt
     #   fastapi
-sympy==1.13.2
+sympy
     # via
     #   -r requirements/base.txt
     #   onnxruntime
@@ -956,3 +956,5 @@ xlsxwriter==3.2.0
 
 # The following packages are considered to be unsafe in a requirements file:
 # setuptools
+nats-py==2.9.0
+python-ulid==2.7.0

@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.datastructures import FormData
 from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
 import logging
 import os
 import sentry_sdk
@@ -11,34 +12,48 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from .pdf_extractor import router as pdf_extractor_router
+from .services.nats_service import start_nats, stop_nats
 
 logger = logging.getLogger("unstructured_api")
 
 
-sentry_sdk.init(
-    environment=os.environ.get("ENVIRONMENT", "localhost"),
-    dsn=os.environ.get(
-        "SENTRY_DSN",
-        "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
-    ),
-    # Set traces_sample_rate to 1.0 to capture 100%
-    # of transactions for tracing.
-    traces_sample_rate=1.0,
-    # Set profiles_sample_rate to 1.0 to profile 100%
-    # of sampled transactions.
-    # We recommend adjusting this value in production.
-    profiles_sample_rate=1.0,
-    integrations=[
-        StarletteIntegration(
-            transaction_style="endpoint",
-            failed_request_status_codes=[403, range(500, 599)],
-        ),
-        FastApiIntegration(
-            transaction_style="endpoint",
-            failed_request_status_codes=[403, range(500, 599)],
-        ),
-    ],
-)
+# sentry_sdk.init(
+#     environment=os.environ.get("ENVIRONMENT", "localhost"),
+#     dsn=os.environ.get(
+#         "SENTRY_DSN",
+#         "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
+#     ),
+#     # Set traces_sample_rate to 1.0 to capture 100%
+#     # of transactions for tracing.
+#     traces_sample_rate=1.0,
+#     # Set profiles_sample_rate to 1.0 to profile 100%
+#     # of sampled transactions.
+#     # We recommend adjusting this value in production.
+#     profiles_sample_rate=1.0,
+#     integrations=[
+#         StarletteIntegration(
+#             transaction_style="endpoint",
+#             failed_request_status_codes=[403, range(500, 599)],
+#         ),
+#         FastApiIntegration(
+#             transaction_style="endpoint",
+#             failed_request_status_codes=[403, range(500, 599)],
+#         ),
+#     ],
+# )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events"""
+    try:
+        await start_nats()
+        yield
+    finally:
+        try:
+            await stop_nats()
+            logger.info("NATS service stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping NATS service: {e}")
 
 app = FastAPI(
     title="Unstructured Pipeline API",
@@ -59,6 +74,7 @@ app = FastAPI(
         },
     ],
     openapi_tags=[{"name": "general"}, {"name": "pdf_extractor"}],
+    lifespan=lifespan
 )
 
 # Note(austin) - This logger just dumps exceptions
@@ -155,6 +171,5 @@ logging.getLogger("uvicorn.access").addFilter(MetricsCheckFilter())
 @app.get("/healthcheck", status_code=status.HTTP_200_OK, include_in_schema=False)
 def healthcheck(request: Request):
     return {"healthcheck": "HEALTHCHECK STATUS: EVERYTHING OK!"}
-
 
 logger.info("Started Unstructured API")

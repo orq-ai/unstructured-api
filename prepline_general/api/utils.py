@@ -1,6 +1,6 @@
 import json
 import re
-from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple
+from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple, Dict
 from unstructured.cleaners.extract import extract_email_address
 
 T = TypeVar("T")
@@ -232,3 +232,7 @@ def clean_credit_card_numbers(text: str) -> str:
         cleaned_text = cleaned_text.replace(card, "")
 
     return cleaned_text
+
+def compute_dispatch_nats_subject(verified_event: Dict[str, str]) -> str:
+    event_type = verified_event["type"].split(".")[-1]
+    return f"{verified_event['messageType']}.{verified_event['entityType'].replace('_', '-')}.{verified_event['entityId']}.{event_type}"

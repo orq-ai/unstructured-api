@@ -23,3 +23,5 @@ motor
 pymongo
 sentry-sdk[fastapi]
 python-dotenv
+nats-py
+python-ulid

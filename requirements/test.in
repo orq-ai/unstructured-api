@@ -14,3 +14,5 @@ httpx
 deepdiff
 pypdfium2
 tiktoken
+nats-py
+python-ulid

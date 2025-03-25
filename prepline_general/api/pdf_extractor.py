@@ -99,7 +99,7 @@ async def get_pdf_content(
 
         return {"content": content, "file_id": request.file_id, "file_name": file_name, "object_name": object_name}
     except Exception as e:
-        sentry_sdk.capture_message("Error processing PDF")
-        sentry_sdk.capture_exception(e)
+        # sentry_sdk.capture_message("Error processing PDF")
+        # sentry_sdk.capture_exception(e)
         logger.error(f"Error processing PDF for fileId {request.file_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Error processing PDF")
