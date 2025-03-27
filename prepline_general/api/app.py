@@ -12,35 +12,36 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from .pdf_extractor import router as pdf_extractor_router
+from .parse_markdown import router as parse_markdown_router
 from .services.nats_service import start_nats, stop_nats
 
 logger = logging.getLogger("unstructured_api")
 
 
-# sentry_sdk.init(
-#     environment=os.environ.get("ENVIRONMENT", "localhost"),
-#     dsn=os.environ.get(
-#         "SENTRY_DSN",
-#         "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
-#     ),
-#     # Set traces_sample_rate to 1.0 to capture 100%
-#     # of transactions for tracing.
-#     traces_sample_rate=1.0,
-#     # Set profiles_sample_rate to 1.0 to profile 100%
-#     # of sampled transactions.
-#     # We recommend adjusting this value in production.
-#     profiles_sample_rate=1.0,
-#     integrations=[
-#         StarletteIntegration(
-#             transaction_style="endpoint",
-#             failed_request_status_codes=[403, range(500, 599)],
-#         ),
-#         FastApiIntegration(
-#             transaction_style="endpoint",
-#             failed_request_status_codes=[403, range(500, 599)],
-#         ),
-#     ],
-# )
+sentry_sdk.init(
+    environment=os.environ.get("ENVIRONMENT", "localhost"),
+    dsn=os.environ.get(
+        "SENTRY_DSN",
+        "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
+    ),
+    # Set traces_sample_rate to 1.0 to capture 100%
+    # of transactions for tracing.
+    traces_sample_rate=1.0,
+    # Set profiles_sample_rate to 1.0 to profile 100%
+    # of sampled transactions.
+    # We recommend adjusting this value in production.
+    profiles_sample_rate=1.0,
+    integrations=[
+        StarletteIntegration(
+            transaction_style="endpoint",
+            failed_request_status_codes=[403, range(500, 599)],
+        ),
+        FastApiIntegration(
+            transaction_style="endpoint",
+            failed_request_status_codes=[403, range(500, 599)],
+        ),
+    ],
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -108,6 +109,7 @@ app.add_middleware(
 )
 app.include_router(general_router)
 app.include_router(pdf_extractor_router, prefix="/extract", tags=["extract"])
+app.include_router(parse_markdown_router, prefix="/parse-markdown", tags=["parse-markdown"])
 
 set_custom_openapi(app)
 
