@@ -2,6 +2,9 @@ import mimetypes
 from fastapi import APIRouter, HTTPException, Depends, Body
 import tempfile
 import os
+import sentry_sdk
+
+from .auth import require_api_key
 from .storage.storage_client import StorageClient
 from .config.database_config import get_database, FileDocument
 import logging
@@ -58,7 +61,7 @@ def extract_file_content(file: BinaryIO, content_type: str) -> str:
     return content
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_api_key)])
 async def get_pdf_content(
     request: FileIdRequest = Body(...),
     storage_client: StorageClient = Depends(get_storage_client),
