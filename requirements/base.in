@@ -1,5 +1,5 @@
 -c constraints.in
-unstructured[all-docs]
+unstructured[all-docs]>=0.18.18
 # Pinning click due to a unicode issue in black
 # can remove after black drops support for Python 3.6
 # ref: https://github.com/psf/black/issues/2964
@@ -13,7 +13,7 @@ uvicorn
 ratelimit
 requests
 backoff
-pypdf
+pypdf>=6.9.2
 pycryptodome
 psutil
 pypdfium2
