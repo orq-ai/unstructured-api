@@ -19,6 +19,7 @@ import psutil
 import requests
 import tiktoken
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, UploadFile, status
+from .auth import require_orq_workspace
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
@@ -750,15 +751,8 @@ def general_partition(
     # For new parameters - add them in models/form_params.py
     files: List[UploadFile],
     form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
+    workspace_id: str = Depends(require_orq_workspace),
 ):
-    # -- must have a valid API key --
-    if api_key_env := os.environ.get("UNSTRUCTURED_API_KEY"):
-        api_key = request.headers.get("unstructured-api-key")
-        if api_key != api_key_env:
-            raise HTTPException(
-                detail=f"API key {api_key} is invalid", status_code=status.HTTP_401_UNAUTHORIZED
-            )
-
     accept_type = request.headers.get("Accept")
 
     # -- detect response content-type conflict when multiple files are uploaded --

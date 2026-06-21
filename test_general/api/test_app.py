@@ -12,8 +12,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pypdf import PdfReader, PdfWriter
 
+import jwt
+
 from prepline_general.api import general
 from prepline_general.api.app import app
+from prepline_general.api.auth import require_orq_workspace
 
 MAIN_API_ROUTE = "general/v0/general"
 
@@ -519,31 +522,33 @@ def test_general_api_returns_503(monkeypatch):
     assert response.status_code == 503
 
 
-def test_general_api_returns_401(monkeypatch):
-    """
-    When UNSTRUCTURED_API_KEY is set, return a 401 if the unstructured-api-key header does not match
-    """
-    monkeypatch.setenv("UNSTRUCTURED_API_KEY", "foobar")
+def test_general_requires_valid_jwt():
+    """/general rejects requests without a valid orq workspace JWT and accepts a signed one."""
+    # Exercise the real dependency (conftest overrides it for other tests).
+    app.dependency_overrides.pop(require_orq_workspace, None)
 
     client = TestClient(app)
     test_file = Path("sample-docs") / "fake-xml.xml"
+
+    # No token -> 401
     response = client.post(
         MAIN_API_ROUTE,
         files=[("files", (str(test_file), open(test_file, "rb")))],
-        headers={"unstructured-api-key": "foobar"},
     )
-
-    assert response.status_code == 200
-
-    client = TestClient(app)
-    test_file = Path("sample-docs") / "fake-xml.xml"
-    response = client.post(
-        MAIN_API_ROUTE,
-        files=[("files", (str(test_file), open(test_file, "rb")))],
-        headers={"unstructured-api-key": "helloworld"},
-    )
-
     assert response.status_code == 401
+
+    # Valid workspace-scoped token -> 200
+    token = jwt.encode(
+        {"iss": "orq.internal", "workspace_id": "ws_test"},
+        os.environ["JWT_SECRET"],
+        algorithm="HS256",
+    )
+    response = client.post(
+        MAIN_API_ROUTE,
+        files=[("files", (str(test_file), open(test_file, "rb")))],
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
 
 
 class MockResponse:
