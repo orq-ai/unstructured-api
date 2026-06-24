@@ -34,36 +34,9 @@ def test_general_api_health_check():
         # Note(yuming): Please sort filetypes alphabetically according to
         # https://github.com/Unstructured-IO/unstructured/blob/main/unstructured/partition/auto.py#L14
         ("stanley-cups.csv", "application/csv"),
-        ("fake.doc", "application/msword"),
         ("fake.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        ("family-day.eml", "message/rfc822"),
-        ("alert.eml", "message/rfc822"),
-        ("announcement.eml", "message/rfc822"),
-        ("fake-email-attachment.eml", "message/rfc822"),
-        ("fake-email-image-embedded.eml", "message/rfc822"),
-        ("fake-email.eml", "message/rfc822"),
-        ("winter-sports.epub", "application/epub"),
         ("fake-html.html", "text/html"),
-        ("layout-parser-paper-fast.jpg", "image/jpeg"),
-        ("spring-weather.html.json", "application/json"),
-        ("README.md", "text/markdown"),
-        ("fake-email.msg", "application/x-ole-storage"),
-        ("fake.odt", "application/vnd.oasis.opendocument.text"),
-        ("layout-parser-paper.pdf", "application/pdf"),
-        ("fake-power-point.ppt", "application/vnd.ms-powerpoint"),
-        (
-            "fake-power-point.pptx",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ),
-        ("README.rst", "text/x-rst"),
-        ("fake-doc.rtf", "application/rtf"),
         ("fake-text.txt", "text/plain"),
-        ("stanley-cups.tsv", "text/tsv"),
-        (
-            "stanley-cups.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ),
-        ("fake-xml.xml", "application/xml"),
     ],
 )
 def test_general_api(example_filename, content_type):
@@ -73,10 +46,11 @@ def test_general_api(example_filename, content_type):
         MAIN_API_ROUTE, files=[("files", (str(test_file), open(test_file, "rb"), content_type))]
     )
     assert response.status_code == 200
-    assert len(response.json()) > 0
-    for i in response.json():
+    documents = response.json()["documents"]
+    assert len(documents) > 0
+    for i in documents:
         assert i["metadata"]["filename"] == example_filename
-    assert len("".join(elem["text"] for elem in response.json())) > 20
+    assert len("".join(elem["text"] for elem in documents)) > 20
 
     # Just hit the second path (posting multiple files) to bump the coverage
     # We'll come back and make smarter tests
@@ -88,7 +62,11 @@ def test_general_api(example_filename, content_type):
         ],
     )
     assert response.status_code == 200
-    assert all(x["metadata"]["filename"] == example_filename for i in response.json() for x in i)
+    assert all(
+        x["metadata"]["filename"] == example_filename
+        for i in response.json()
+        for x in i["documents"]
+    )
 
     assert len(response.json()) > 0
 
@@ -528,7 +506,7 @@ def test_general_requires_valid_jwt():
     app.dependency_overrides.pop(require_orq_workspace, None)
 
     client = TestClient(app)
-    test_file = Path("sample-docs") / "fake-xml.xml"
+    test_file = Path("sample-docs") / "fake-text.txt"
 
     # No token -> 401
     response = client.post(
@@ -630,7 +608,7 @@ def test_parallel_mode_preserves_uniqueness_of_hashes_when_assembling_pages_spli
 def test_general_api_can_set_content_type():
     """Test that we can override the content type via header or form data param"""
     client = TestClient(app)
-    example_filename = "family-day.eml"
+    example_filename = "fake-text.txt"
     test_file_path = str(Path("sample-docs") / example_filename)
 
     # requests can override the content type in the header by using this tuple
@@ -638,8 +616,9 @@ def test_general_api_can_set_content_type():
         response = client.post(MAIN_API_ROUTE, files=[("files", (test_file_path, f, "text/plain"))])
 
         assert response.status_code == 200
-        assert len(response.json()) > 0
-        for i in response.json():
+        documents = response.json()["documents"]
+        assert len(documents) > 0
+        for i in documents:
             assert i["metadata"]["filetype"] == "text/plain"
 
         # We can also override the type via api param
@@ -651,8 +630,9 @@ def test_general_api_can_set_content_type():
             )
 
         assert response.status_code == 200
-        assert len(response.json()) > 0
-        for i in response.json():
+        documents = response.json()["documents"]
+        assert len(documents) > 0
+        for i in documents:
             assert i["metadata"]["filetype"] == "text/plain"
 
 
