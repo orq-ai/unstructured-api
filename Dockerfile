@@ -7,7 +7,7 @@ ARG NB_USER=notebook-user
 ARG NB_UID=1000
 ARG PIP_VERSION
 ARG PIPELINE_PACKAGE
-ARG PYTHON_VERSION="3.11"
+ARG PYTHON_VERSION="3.12"
 
 # Set up environment
 ENV PYTHON python${PYTHON_VERSION}
@@ -25,7 +25,9 @@ RUN ${PIP} install pip==${PIP_VERSION}
 RUN ${PIP} install --no-cache -r requirements-base.txt
 
 FROM python-deps as model-deps
-RUN ${PYTHON} -c "from unstructured.nlp.tokenize import download_nltk_packages; download_nltk_packages()" && \
+# unstructured>=0.18 tokenizes via spaCy (en_core_web_sm) instead of NLTK; prefetch
+# the model into the writable user site so runtime doesn't try to install it.
+RUN ${PYTHON} -m spacy download en_core_web_sm && \
   ${PYTHON} -c "from unstructured.partition.model_init import initialize; initialize()"
 
 FROM model-deps as code

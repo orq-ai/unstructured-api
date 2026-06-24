@@ -343,6 +343,8 @@ python-iso639==2026.4.20
     # via unstructured
 python-magic==0.4.27
     # via unstructured
+python-multipart==0.0.32
+    # via -r requirements/base.in
 python-oxmsg==0.0.2
     # via unstructured
 python-pptx==1.0.2

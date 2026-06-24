@@ -27,3 +27,6 @@ python-dotenv
 nats-py
 python-ulid
 PyJWT>=2.8.0
+# FastAPI form/multipart file uploads (UploadFile in general.py); was previously
+# only a transitive dep and got dropped on recompile, breaking route registration.
+python-multipart
