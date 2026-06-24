@@ -1,5 +1,5 @@
 -c constraints.in
-unstructured[all-docs]>=0.18.32
+unstructured[all-docs]==0.23.1
 pdfminer-six>=20251230
 # Pinning click due to a unicode issue in black
 # can remove after black drops support for Python 3.6

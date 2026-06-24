@@ -3,4 +3,4 @@
 # extras. Putting a dependency here will only affect dependency sets that contain them -- in other
 # words, if something does not require a constraint, it will not be installed.
 ####################################################################################################
-numpy<2.0.0
+numpy<3.0.0

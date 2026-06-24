@@ -39,7 +39,9 @@ def test_general_api_health_check():
         ("fake-text.txt", "text/plain"),
     ],
 )
-def test_general_api(example_filename, content_type):
+def test_general_api(monkeypatch, example_filename, content_type):
+    monkeypatch.setattr(general, "_check_free_memory", lambda: None)
+
     client = TestClient(app)
     test_file = Path("sample-docs") / example_filename
     response = client.post(
@@ -605,8 +607,10 @@ def test_parallel_mode_preserves_uniqueness_of_hashes_when_assembling_pages_spli
     assert len(set(ids)) == len(ids), "Element IDs across all pages should be unique."
 
 
-def test_general_api_can_set_content_type():
+def test_general_api_can_set_content_type(monkeypatch):
     """Test that we can override the content type via header or form data param"""
+    monkeypatch.setattr(general, "_check_free_memory", lambda: None)
+
     client = TestClient(app)
     example_filename = "fake-text.txt"
     test_file_path = str(Path("sample-docs") / example_filename)
