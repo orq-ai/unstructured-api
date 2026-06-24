@@ -2,6 +2,9 @@ import mimetypes
 from fastapi import APIRouter, HTTPException, Depends, Body
 import tempfile
 import os
+import sentry_sdk
+
+from .auth import require_orq_workspace
 from .storage.storage_client import StorageClient
 from .config.database_config import get_database, FileDocument
 import logging
@@ -63,9 +66,10 @@ async def get_pdf_content(
     request: FileIdRequest = Body(...),
     storage_client: StorageClient = Depends(get_storage_client),
     db: Collection[FileDocument] = Depends(get_database),
+    workspace_id: str = Depends(require_orq_workspace),
 ):
     try:
-        file_doc = db.find_one({"_id": request.file_id})
+        file_doc = db.find_one({"_id": request.file_id, "workspace_id": workspace_id})
 
         if not file_doc:
             raise HTTPException(status_code=404, detail="File not found in database")
@@ -97,6 +101,9 @@ async def get_pdf_content(
         os.unlink(temp_file.name)  # Delete the temporary file
 
         return {"content": content, "file_id": request.file_id, "file_name": file_name, "object_name": object_name}
+    except HTTPException:
+        # 404/400 (including cross-tenant denial) are deliberate — don't mask as 500.
+        raise
     except Exception as e:
         sentry_sdk.capture_message("Error processing PDF")
         sentry_sdk.capture_exception(e)

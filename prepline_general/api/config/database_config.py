@@ -15,6 +15,7 @@ class FileDocument(TypedDict):
     bytes: int
     file_name: str
     file_id: str
+    workspace_id: str
 
 # Synchronous function
 def get_database() -> Collection[FileDocument]:
