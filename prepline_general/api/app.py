@@ -18,12 +18,23 @@ from .services.nats_service import start_nats, stop_nats
 logger = logging.getLogger("unstructured_api")
 
 
+def _get_cors_allowed_origins() -> list[str]:
+    configured_origins = os.environ.get(
+        "CORS_ALLOWED_ORIGINS",
+        "https://my.orq.ai,https://my.staging.orq.ai",
+    )
+    allowed_origins = [
+        origin.strip()
+        for origin in configured_origins.split(",")
+        if origin.strip() and origin.strip() != "*"
+    ]
+
+    return allowed_origins or ["https://my.orq.ai"]
+
+
 sentry_sdk.init(
     environment=os.environ.get("ENVIRONMENT", "localhost"),
-    dsn=os.environ.get(
-        "SENTRY_DSN",
-        "https://226b521aa4f725dd15cca843479690aa@o1256669.ingest.us.sentry.io/4507792445079552",
-    ),
+    dsn=os.environ.get("SENTRY_DSN", ""),
     # Set traces_sample_rate to 1.0 to capture 100%
     # of transactions for tracing.
     traces_sample_rate=1.0,
@@ -43,6 +54,7 @@ sentry_sdk.init(
     ],
 )
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle startup and shutdown events"""
@@ -55,6 +67,7 @@ async def lifespan(app: FastAPI):
             logger.info("NATS service stopped successfully")
         except Exception as e:
             logger.error(f"Error stopping NATS service: {e}")
+
 
 app = FastAPI(
     title="Unstructured Pipeline API",
@@ -75,7 +88,7 @@ app = FastAPI(
         },
     ],
     openapi_tags=[{"name": "general"}, {"name": "pdf_extractor"}],
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Note(austin) - This logger just dumps exceptions
@@ -96,13 +109,14 @@ async def http_error_handler(request: Request, e: HTTPException):
 # Catch any other errors and return as 500
 @app.exception_handler(Exception)
 async def error_handler(request: Request, e: Exception):
-    return JSONResponse(status_code=500, content={"detail": str(e)})
+    logger.exception("Unhandled error")
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_get_cors_allowed_origins(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
@@ -173,5 +187,6 @@ logging.getLogger("uvicorn.access").addFilter(MetricsCheckFilter())
 @app.get("/healthcheck", status_code=status.HTTP_200_OK, include_in_schema=False)
 def healthcheck(request: Request):
     return {"healthcheck": "HEALTHCHECK STATUS: EVERYTHING OK!"}
+
 
 logger.info("Started Unstructured API")

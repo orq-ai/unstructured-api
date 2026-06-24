@@ -3,8 +3,10 @@ from fastapi import APIRouter, HTTPException, Depends, Body
 import tempfile
 import os
 import sentry_sdk
+from pathlib import PurePosixPath
 
 from .auth import require_orq_workspace
+from .filetypes import get_validated_mimetype_for_filename
 from .storage.storage_client import StorageClient
 from .config.database_config import get_database, FileDocument
 import logging
@@ -20,6 +22,12 @@ logger = logging.getLogger("unstructured_api")
 
 class FileIdRequest(BaseModel):
     file_id: str
+
+
+def _validate_object_name(object_name: str) -> None:
+    path = PurePosixPath(object_name)
+    if object_name.startswith("/") or "\\" in object_name or ".." in path.parts:
+        raise HTTPException(status_code=400, detail="Invalid object reference")
 
 
 def get_storage_client():
@@ -68,6 +76,7 @@ async def get_pdf_content(
     db: Collection[FileDocument] = Depends(get_database),
     workspace_id: str = Depends(require_orq_workspace),
 ):
+    temp_path: str | None = None
     try:
         file_doc = db.find_one({"_id": request.file_id, "workspace_id": workspace_id})
 
@@ -80,32 +89,40 @@ async def get_pdf_content(
         if not object_name:
             raise HTTPException(status_code=400, detail="Object name not found in file document")
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
-            success = storage_client.download_file(object_name, temp_file.name)
+        _validate_object_name(object_name)
+        guessed_content_type = mimetypes.guess_type(file_name)[0]
+        file_content_type = get_validated_mimetype_for_filename(
+            file_name,
+            content_type_hint=guessed_content_type,
+        )
 
-            if not success:
-                raise HTTPException(
-                    status_code=404, detail="File not found or error downloading from storage"
-                )
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_path = temp_file.name
 
-            with open(temp_file.name, "rb") as file:
+        success = storage_client.download_file(object_name, temp_path)
 
-                file_content_type = str(mimetypes.guess_type(file_name)[0])
+        if not success:
+            raise HTTPException(
+                status_code=404, detail="File not found or error downloading from storage"
+            )
 
-                # If the type of the file is PDF, extract the content
-                if file_content_type == "application/pdf":
-                    content = extract_pdf_content(file)
-                else:
-                    content = extract_file_content(file, file_content_type)
+        with open(temp_path, "rb") as file:
 
-        os.unlink(temp_file.name)  # Delete the temporary file
+            # If the type of the file is PDF, extract the content
+            if file_content_type == "application/pdf":
+                content = extract_pdf_content(file)
+            else:
+                content = extract_file_content(file, file_content_type)
 
-        return {"content": content, "file_id": request.file_id, "file_name": file_name, "object_name": object_name}
+        return {"content": content, "file_id": request.file_id, "file_name": file_name}
     except HTTPException:
         # 404/400 (including cross-tenant denial) are deliberate — don't mask as 500.
         raise
     except Exception as e:
         sentry_sdk.capture_message("Error processing PDF")
         sentry_sdk.capture_exception(e)
-        logger.error(f"Error processing PDF for fileId {request.file_id}: {str(e)}")
+        logger.error("Error processing PDF for fileId %s: %s", request.file_id, type(e).__name__)
         raise HTTPException(status_code=500, detail="Error processing PDF")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
