@@ -1,3 +1,4 @@
+import logging
 import os
 from io import BytesIO
 from typing import Optional
@@ -6,6 +7,10 @@ from fastapi import HTTPException, UploadFile
 
 from unstructured.file_utils.filetype import detect_filetype
 from unstructured.file_utils.model import FileType
+
+from .metrics import BLOCKED_TOTAL
+
+logger = logging.getLogger("unstructured_api")
 
 ALLOWED_PARTITIONABLE_FILETYPES = {
     FileType.CSV,
@@ -34,6 +39,11 @@ def _get_filetype_from_filename(filename: str | None) -> FileType | None:
 
 def _raise_unsupported_filetype(filetype: FileType | None) -> None:
     mime_type = filetype.mime_type if filetype else "unknown"
+    # Security signal: rejected types are how the RST LFD/SSRF probe (and similar
+    # parser-abuse attempts) surface at the gate. Count by reason; log the mime so
+    # spikes of a specific disallowed type (e.g. text/x-rst) are visible.
+    BLOCKED_TOTAL.labels(endpoint="partition", reason="unsupported_filetype").inc()
+    logger.warning("blocked unsupported filetype: mime=%s", mime_type)
     raise HTTPException(
         status_code=400,
         detail=(f"File type {mime_type} is not supported."),

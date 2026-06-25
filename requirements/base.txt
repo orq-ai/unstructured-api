@@ -272,6 +272,10 @@ preshed==3.0.13
     # via
     #   spacy
     #   thinc
+prometheus-client==0.25.0
+    # via prometheus-fastapi-instrumentator
+prometheus-fastapi-instrumentator==7.1.0
+    # via -r requirements/base.in
 proto-plus==1.28.0
     # via
     #   google-api-core

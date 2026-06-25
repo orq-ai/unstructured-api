@@ -25,6 +25,8 @@ pymongo
 sentry-sdk[fastapi]
 python-dotenv
 nats-py
+# Prometheus metrics: auto-instruments every endpoint + exposes /metrics
+prometheus-fastapi-instrumentator
 python-ulid
 PyJWT>=2.8.0
 # FastAPI form/multipart file uploads (UploadFile in general.py); was previously

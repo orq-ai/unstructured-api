@@ -9,6 +9,7 @@ from .auth import require_orq_workspace
 from .filetypes import get_validated_mimetype_for_filename
 from .storage.storage_client import StorageClient
 from .config.database_config import get_database, FileDocument
+from .metrics import BLOCKED_TOTAL, FILES_TOTAL, STORAGE_OPS_TOTAL
 import logging
 from pymongo.collection import Collection
 from pydantic import BaseModel
@@ -27,6 +28,9 @@ class FileIdRequest(BaseModel):
 def _validate_object_name(object_name: str) -> None:
     path = PurePosixPath(object_name)
     if object_name.startswith("/") or "\\" in object_name or ".." in path.parts:
+        # Security signal: a stored object_name that looks like path traversal.
+        BLOCKED_TOTAL.labels(endpoint="extract", reason="invalid_object_ref").inc()
+        logger.warning("blocked invalid object reference: %r", object_name)
         raise HTTPException(status_code=400, detail="Invalid object reference")
 
 
@@ -102,9 +106,12 @@ async def get_pdf_content(
         success = storage_client.download_file(object_name, temp_path)
 
         if not success:
+            STORAGE_OPS_TOTAL.labels(outcome="not_found").inc()
+            FILES_TOTAL.labels(endpoint="extract", filetype=file_content_type, outcome="error").inc()
             raise HTTPException(
                 status_code=404, detail="File not found or error downloading from storage"
             )
+        STORAGE_OPS_TOTAL.labels(outcome="ok").inc()
 
         with open(temp_path, "rb") as file:
 
@@ -114,6 +121,7 @@ async def get_pdf_content(
             else:
                 content = extract_file_content(file, file_content_type)
 
+        FILES_TOTAL.labels(endpoint="extract", filetype=file_content_type, outcome="ok").inc()
         return {"content": content, "file_id": request.file_id, "file_name": file_name}
     except HTTPException:
         # 404/400 (including cross-tenant denial) are deliberate — don't mask as 500.

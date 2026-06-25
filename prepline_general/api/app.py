@@ -11,6 +11,7 @@ from .openapi import set_custom_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
+from prometheus_fastapi_instrumentator import Instrumentator
 from .pdf_extractor import router as pdf_extractor_router
 from .parse_markdown import router as parse_markdown_router
 from .services.nats_service import start_nats, stop_nats
@@ -187,6 +188,17 @@ logging.getLogger("uvicorn.access").addFilter(MetricsCheckFilter())
 @app.get("/healthcheck", status_code=status.HTTP_200_OK, include_in_schema=False)
 def healthcheck(request: Request):
     return {"healthcheck": "HEALTHCHECK STATUS: EVERYTHING OK!"}
+
+
+# -- Prometheus: auto-instrument every endpoint (request count, latency, and
+# exact status code) and expose /metrics. Exact status codes (not grouped) so
+# security dashboards can alert on 401/400/500 rates per endpoint. Domain- and
+# security-specific counters live in metrics.py and are incremented inside the
+# individual handlers, the auth layer, and the NATS consumer.
+Instrumentator(
+    should_group_status_codes=False,
+    excluded_handlers=["/metrics", "/healthcheck"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 logger.info("Started Unstructured API")

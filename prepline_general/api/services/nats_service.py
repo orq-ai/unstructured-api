@@ -12,6 +12,7 @@ from nats.aio.subscription import Subscription
 from ..models.knowledge import UnstructuredProcessMarkdownCommand, UnstructuredProcessChunksCommand
 from ..services.message_processor import Chunk, process_markdown_message
 from ..utils import compute_dispatch_nats_subject
+from ..metrics import NATS_CONNECTED, NATS_MESSAGES_TOTAL
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,10 @@ async def connect_nats() -> None:
     orq_nats_server = os.getenv("ORQ_NATS_SERVER", "nats://localhost:4222")
     try:
         nats_client = await nats.connect(servers=orq_nats_server)  # type: ignore
+        NATS_CONNECTED.set(1)
         logger.info("Connected to NATS")
     except Exception as e:
+        NATS_CONNECTED.set(0)
         logger.error(f"Could not connect to NATS: {e}")
         raise
 
@@ -60,6 +63,7 @@ async def disconnect_nats() -> None:
     if nats_client:
         await nats_client.drain()
         await nats_client.close()
+        NATS_CONNECTED.set(0)
         logger.info("Disconnected from NATS")
 
 
@@ -109,6 +113,7 @@ async def message_handler(msg: Msg) -> None:
         
         # Filter for specific message type
         if data.get("type") != "command.knowledge.process_unstructured_markdown":
+            NATS_MESSAGES_TOTAL.labels(outcome="skipped").inc()
             logger.info(f"Skipping message with type: {data.get('type')}")
             return
             
@@ -139,9 +144,11 @@ async def message_handler(msg: Msg) -> None:
         
         # Create chunks array with all chunks
         await create_chunks_response(chunks, command)
-            
+
+        NATS_MESSAGES_TOTAL.labels(outcome="processed").inc()
         logger.info("Message processed and chunks published successfully")
     except Exception as e:
+        NATS_MESSAGES_TOTAL.labels(outcome="error").inc()
         logger.error(f"Error handling message: {e}", exc_info=True)
         raise
 

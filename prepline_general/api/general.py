@@ -20,6 +20,7 @@ import requests
 import tiktoken
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, UploadFile, status
 from .auth import require_orq_workspace
+from .metrics import BLOCKED_TOTAL, FILES_TOTAL
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
@@ -767,6 +768,7 @@ def general_partition(
             "text/csv",
         ]
     ):
+        BLOCKED_TOTAL.labels(endpoint="general", reason="conflict_media_type").inc()
         raise HTTPException(
             detail=f"Conflict in media type {accept_type} with response type 'multipart/mixed'.\n",
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
@@ -787,6 +789,10 @@ def general_partition(
             file_content_type = get_validated_mimetype(
                 file, content_type_hint=form_params.content_type
             )
+            # File passed the filetype allowlist and is about to be partitioned.
+            FILES_TOTAL.labels(
+                endpoint="general", filetype=file_content_type or "unknown", outcome="ok"
+            ).inc()
 
             _file = file.file
 
