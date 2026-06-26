@@ -5,6 +5,7 @@ import jwt
 from fastapi import HTTPException, Request, status
 
 from .metrics import AUTH_TOTAL
+from .request_context import request_context
 
 logger = logging.getLogger("unstructured_api")
 
@@ -23,12 +24,14 @@ def _reject(request: Request, *, reason: str, status_code: int, detail: str) -> 
     brute-force without leaking credentials.
     """
     AUTH_TOTAL.labels(result="failure", reason=reason).inc()
-    client = request.client.host if request.client else "unknown"
+    ctx = request_context(request)
     logger.warning(
-        "auth rejected: reason=%s path=%s client=%s",
+        "auth rejected: reason=%s path=%s ip=%s country=%s cf_ray=%s",
         reason,
         request.url.path,
-        client,
+        ctx["ip"],
+        ctx["country"],
+        ctx["ray"],
     )
     return HTTPException(status_code=status_code, detail=detail)
 

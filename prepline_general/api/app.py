@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from prometheus_fastapi_instrumentator import Instrumentator
+
+from .request_context import request_context
 from .pdf_extractor import router as pdf_extractor_router
 from .parse_markdown import router as parse_markdown_router
 from .services.nats_service import start_nats, stop_nats
@@ -183,6 +185,31 @@ class MetricsCheckFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(HealthCheckFilter())
 logging.getLogger("uvicorn.access").addFilter(MetricsCheckFilter())
+
+
+@app.middleware("http")
+async def log_request_context(request: Request, call_next):
+    """One structured access line per request enriched with Cloudflare context.
+
+    Behind Cloudflare -> gateway -> mesh, the real caller is only visible via the
+    CF-* headers; logging CF-Connecting-IP / CF-Ray / CF-IPCountry here gives the
+    true client IP and a correlation id on every endpoint (the auth layer adds the
+    same context to its rejection logs). Health/metrics are skipped to cut noise.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path not in ("/healthcheck", "/metrics"):
+        ctx = request_context(request)
+        logger.info(
+            "request method=%s path=%s status=%s ip=%s country=%s cf_ray=%s",
+            request.method,
+            path,
+            response.status_code,
+            ctx["ip"],
+            ctx["country"],
+            ctx["ray"],
+        )
+    return response
 
 
 @app.get("/healthcheck", status_code=status.HTTP_200_OK, include_in_schema=False)
