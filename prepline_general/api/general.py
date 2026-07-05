@@ -23,11 +23,16 @@ from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
-from unstructured.cleaners.core import clean
+from unstructured.cleaners.core import clean, clean_ordered_bullets
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
 from unstructured.partition.utils.constants import PartitionStrategy
-from unstructured.staging.base import convert_to_dataframe, convert_to_isd, elements_from_json
+from unstructured.staging.base import (
+    convert_to_dataframe,
+    convert_to_isd,
+    elements_from_dicts,
+    elements_from_json,
+)
 from unstructured_inference.models.base import UnknownModelException  # type: ignore
 
 from .auth import require_orq_workspace
@@ -100,7 +105,7 @@ def get_pdf_splits(pdf_pages: Sequence[PageObject], split_size: int = 1):
         new_pdf.write(pdf_buffer)
         pdf_buffer.seek(0)
 
-        yield (pdf_buffer.read(), offset)
+        yield pdf_buffer.read(), offset
         offset += split_size
 
 
@@ -188,6 +193,13 @@ def partition_file_via_api(
         content_type,
         **partition_kwargs,
     )
+    try:
+        parsed = json.loads(result)
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        # this API's own response shape: {"documents": [...], "metadata": {...}}
+        return elements_from_dicts(parsed["documents"])
     return elements_from_json(text=result)
 
 
@@ -207,6 +219,10 @@ def pipeline_cleanup(
         dashes=clean_dashes,
         extra_whitespace=clean_whitespaces,
     )
+
+    # clean() has no numbered-list option; this param was silently ignored
+    if clean_numbered_list:
+        text = clean_ordered_bullets(text)
 
     if delete_emails:
         text = clean_emails(text)
@@ -584,9 +600,12 @@ def _check_pdf(file: IO[bytes]):
     try:
         pdf = PdfReader(file)
         if pdf.is_encrypted:
-            raise FileNotDecryptedError("File has not been decrypted")
+            # owner-encrypted PDFs (edit restrictions, empty user password)
+            # are readable; reject only when a real password is required
+            if not pdf.decrypt(""):
+                raise FileNotDecryptedError("File has not been decrypted")
         # This will raise if the file is encrypted with metadata protection
-        pdf.metadata
+        _ = pdf.metadata
         return pdf
     except FileNotDecryptedError:
         raise HTTPException(
@@ -642,6 +661,8 @@ def _set_pdf_infer_table_structure(
 
 class MultipartMixedResponse(StreamingResponse):
     CRLF = b"\r\n"
+    # assigned in init_headers, which StreamingResponse.__init__ always calls
+    boundary_value: str
 
     def __init__(self, *args: Any, content_type: Optional[str] = None, **kwargs: Any):
         super().__init__(*args, **kwargs)
@@ -800,9 +821,7 @@ def general_partition(
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
         )
 
-    logger.info(
-        "partition request: workspace=%s files=%d", workspace_id, len(files)
-    )
+    logger.info("partition request: workspace=%s files=%d", workspace_id, len(files))
 
     # -- validate other arguments --
     chunking_strategy = _validate_chunking_strategy(form_params.chunking_strategy)
@@ -864,9 +883,7 @@ def general_partition(
                 # models are not JSON serializable — so every multipart/mixed
                 # JSON request previously 500'd.
                 yield (
-                    response
-                    if isinstance(response, (str, bytes))
-                    else response.model_dump_json()
+                    response if isinstance(response, (str, bytes)) else response.model_dump_json()
                 )
             elif form_params.output_format == "text/csv":
                 yield PlainTextResponse(response, media_type="text/csv")
