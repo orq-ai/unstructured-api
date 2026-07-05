@@ -40,8 +40,14 @@ install-nltk-models:
 ## pip-compile:                 compiles all base/dev/test requirements
 .PHONY: pip-compile
 pip-compile:
-	pip-compile --upgrade requirements/base.in
-	pip-compile --upgrade -o requirements/test.txt requirements/base.txt requirements/test.in
+	uv lock --upgrade
+	uv export --frozen --no-dev --no-hashes --no-annotate -o requirements/base.txt
+	uv export --frozen --no-hashes --no-annotate -o requirements/test.txt
+
+## venv:                        create/sync the local dev environment (uv sync)
+.PHONY: venv
+venv:
+	uv sync
 
 .PHONY: install-pandoc
 install-pandoc:
