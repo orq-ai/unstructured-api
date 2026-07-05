@@ -30,6 +30,12 @@ _MIME_TYPE_RE = re.compile(r"^[\w.+-]+/[\w.+-]+$")
 def _validate_token_list(values: Optional[List[str]], field: str) -> Optional[List[str]]:
     if values is None:
         return None
+    # Form serialization turns unset list fields into empty strings
+    # (e.g. `languages=` from the parallel-mode sub-request); treat empties
+    # as absent rather than rejecting the request.
+    values = [v for v in values if not (isinstance(v, str) and not v.strip())]
+    if not values:
+        return None
     if len(values) > MAX_LIST_ITEMS:
         raise ValueError(f"{field} accepts at most {MAX_LIST_ITEMS} items")
     for v in values:
@@ -132,13 +138,8 @@ class GeneralFormParams(BaseModel):
                 "overlap must be smaller than max_characters "
                 f"({self.overlap} >= {self.max_characters})"
             )
-        if (
-            self.new_after_n_chars is not None
-            and self.new_after_n_chars > self.max_characters
-        ):
-            raise ValueError(
-                "new_after_n_chars (soft max) cannot exceed max_characters (hard max)"
-            )
+        if self.new_after_n_chars is not None and self.new_after_n_chars > self.max_characters:
+            raise ValueError("new_after_n_chars (soft max) cannot exceed max_characters (hard max)")
         if (
             self.combine_under_n_chars is not None
             and self.combine_under_n_chars > self.max_characters
@@ -421,9 +422,7 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
                 xml_keep_tags=xml_keep_tags,
                 languages=languages if languages else None,
                 ocr_languages=ocr_languages if ocr_languages else None,
-                skip_infer_table_types=(
-                    skip_infer_table_types if skip_infer_table_types else None
-                ),
+                skip_infer_table_types=(skip_infer_table_types if skip_infer_table_types else None),
                 gz_uncompressed_content_type=gz_uncompressed_content_type,
                 output_format=output_format,
                 coordinates=coordinates,
