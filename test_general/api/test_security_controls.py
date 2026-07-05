@@ -1,5 +1,6 @@
 import io
 import os
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock
 
 import jwt
@@ -86,8 +87,13 @@ def test_parse_markdown_requires_valid_jwt(monkeypatch):
 
     assert response.status_code == 401
 
+    # exp is now a required claim: a token without one never expires
     token = jwt.encode(
-        {"iss": "orq.internal", "workspace_id": "ws_test"},
+        {
+            "iss": "orq.internal",
+            "workspace_id": "ws_test",
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+        },
         os.environ["JWT_SECRET"],
         algorithm="HS256",
     )

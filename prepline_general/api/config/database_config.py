@@ -5,9 +5,11 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection
 import os
 from typing import Any
 
+
 # Define the document structure using TypedDict
 class FilesPurposes:
-    Retrieval = 'retrieval'
+    Retrieval = "retrieval"
+
 
 class FileDocument(TypedDict):
     object_name: str
@@ -17,18 +19,20 @@ class FileDocument(TypedDict):
     file_id: str
     workspace_id: str
 
+
 # Synchronous function
 def get_database() -> Collection[FileDocument]:
     mongo_url = os.environ.get("MONGO_DATABASE_URL")
     if not mongo_url:
         raise ValueError("The 'MONGO_DATABASE_URL' environment variable is not set.")
-    
+
     try:
         client: MongoClient[Any] = MongoClient(mongo_url)
-        database = client['storage']  # Access the 'storage' database
-        return database.get_collection('files')  # Return the 'files' collection
+        database = client["storage"]  # Access the 'storage' database
+        return database.get_collection("files")  # Return the 'files' collection
     except Exception as e:
         raise ConnectionError(f"Error connecting to MongoDB: {e}")
+
 
 # Asynchronous function
 async def get_async_database() -> AsyncIOMotorCollection[FileDocument]:
@@ -41,6 +45,6 @@ async def get_async_database() -> AsyncIOMotorCollection[FileDocument]:
     try:
         client: AsyncIOMotorClient[Any] = AsyncIOMotorClient(mongo_uri)
         database = client[db_name]  # Access the database asynchronously
-        return database.get_collection('files')  # Return the 'files' collection asynchronously
+        return database.get_collection("files")  # Return the 'files' collection asynchronously
     except Exception as e:
         raise ConnectionError(f"Error connecting to MongoDB asynchronously: {e}")

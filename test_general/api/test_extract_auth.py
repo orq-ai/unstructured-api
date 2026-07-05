@@ -22,7 +22,8 @@ def _set_secret(monkeypatch):
 
 
 def _token(secret=SECRET, **overrides):
-    payload = {"iss": "orq.internal", "workspace_id": "ws_1"}
+    # exp is a required claim now; a token without one never expires
+    payload = {"iss": "orq.internal", "workspace_id": "ws_1", "exp": int(time.time()) + 300}
     payload.update(overrides)
     return jwt.encode(payload, secret, algorithm="HS256")
 
@@ -63,14 +64,17 @@ def test_untrusted_issuer_rejected():
 
 
 def test_expired_token_rejected():
-    token = _token(exp=int(time.time()) - 10)
+    # past the 30s clock-skew leeway
+    token = _token(exp=int(time.time()) - 60)
     with pytest.raises(HTTPException) as exc:
         require_orq_workspace(_req(f"Bearer {token}"))
     assert exc.value.status_code == 401
 
 
 def test_token_without_workspace_rejected():
-    token = jwt.encode({"iss": "orq.internal"}, SECRET, algorithm="HS256")
+    token = jwt.encode(
+        {"iss": "orq.internal", "exp": int(time.time()) + 300}, SECRET, algorithm="HS256"
+    )
     with pytest.raises(HTTPException) as exc:
         require_orq_workspace(_req(f"Bearer {token}"))
     assert exc.value.status_code == 403
