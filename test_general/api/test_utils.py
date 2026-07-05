@@ -39,8 +39,10 @@ def test_smart_value_parser(desired_type: type, value_to_parse: Any, expected_re
         (str, "'fast'", "fast"),
         (str, '"fast"', "fast"),
         (str, "!fast", "!fast"),
-        (str, "fa'st", "fast"),
-        (str, "fast''''''", "fast"),
+        # only enclosing quote pairs are stripped; interior/unpaired quotes
+        # are data ("O'Brien" must survive)
+        (str, "fa'st", "fa'st"),
+        (str, "fast''''''", "fast''''''"),
     ],
 )
 def test_literal_value_stripped_or_first_element(

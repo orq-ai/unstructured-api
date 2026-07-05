@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import ANY, Mock
@@ -215,17 +216,18 @@ def test_valid_encoding_param():
 
 def test_invalid_encoding_param():
     """
-    Verify that we get a 500 if we pass an invalid encoding through to partition
+    Verify an invalid encoding is rejected up front with a 422 instead of
+    surfacing as a LookupError (500) deep inside partition
     """
     client = TestClient(app)
     test_file = Path("sample-docs") / "fake-html.html"
-    with pytest.raises(LookupError) as excinfo:
-        client.post(
-            MAIN_API_ROUTE,
-            files=[("files", (str(test_file), open(test_file, "rb"), "text/plain"))],
-            data={"encoding": "not_an_encoding"},
-        )
-    assert "unknown encoding" in str(excinfo.value)
+    response = client.post(
+        MAIN_API_ROUTE,
+        files=[("files", (str(test_file), open(test_file, "rb"), "text/plain"))],
+        data={"encoding": "not_an_encoding"},
+    )
+    assert response.status_code == 422
+    assert "encoding" in str(response.json()["detail"])
 
 
 def test_api_with_different_encodings():
@@ -517,9 +519,9 @@ def test_general_requires_valid_jwt():
     )
     assert response.status_code == 401
 
-    # Valid workspace-scoped token -> 200
+    # Valid workspace-scoped token -> 200 (exp is a required claim now)
     token = jwt.encode(
-        {"iss": "orq.internal", "workspace_id": "ws_test"},
+        {"iss": "orq.internal", "workspace_id": "ws_test", "exp": int(time.time()) + 300},
         os.environ["JWT_SECRET"],
         algorithm="HS256",
     )
@@ -589,7 +591,7 @@ def test_parallel_mode_preserves_uniqueness_of_hashes_when_assembling_pages_spli
 
     assert response.status_code == 200
 
-    elements = response.json()
+    elements = response.json()["documents"]
     texts = [element.get("text") for element in elements]
 
     num_pages = 3
@@ -998,7 +1000,9 @@ def test_invalid_strategy_for_image_file():
             "The Chipper model is not available for download. "
             "It can be accessed via the official hosted API.",
         ),
-        (OSError(1, "An error happened"), 500, "[Errno 1] An error happened"),
+        # OSError detail is sanitized: str(e) routinely contains internal
+        # filesystem paths and must not reach the caller
+        (OSError(1, "An error happened"), 500, "File processing failed due to an internal error."),
     ],
 )
 def test_chipper_not_available_errors(monkeypatch, mocker, exception, status_code, message):
