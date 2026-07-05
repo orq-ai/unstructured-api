@@ -1,49 +1,150 @@
+import codecs
+import re
 from typing import Annotated, List, Literal, Optional
 
-from fastapi import Form
-from pydantic import BaseModel, BeforeValidator
+from fastapi import Form, HTTPException
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from prepline_general.api.utils import SmartValueParser
+
+# Bounds for values that flow into the chunker; unbounded values either crash
+# partitioning (500s) or let a single request allocate absurd amounts of work.
+MAX_CHUNK_CHARACTERS = 100_000
+MAX_LIST_ITEMS = 50
+
+# tesseract-style language codes ("eng", "nld", "chi_sim") and simple tokens
+# for table types / element types / model names. These strings are forwarded
+# into other subsystems, so constrain them to boring shapes.
+_SIMPLE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_+-]{1,32}$")
+_MIME_TYPE_RE = re.compile(r"^[\w.+-]+/[\w.+-]+$")
+
+
+def _validate_token_list(values: Optional[List[str]], field: str) -> Optional[List[str]]:
+    if values is None:
+        return None
+    if len(values) > MAX_LIST_ITEMS:
+        raise ValueError(f"{field} accepts at most {MAX_LIST_ITEMS} items")
+    for v in values:
+        if not isinstance(v, str) or not _SIMPLE_TOKEN_RE.match(v):
+            raise ValueError(f"{field} contains an invalid value: {v!r}")
+    return values
 
 
 class GeneralFormParams(BaseModel):
     """General partition API form parameters for the prepline API.
     To add a new parameter, add it here and in the as_form classmethod.
     Use Annotated to add a description and example for the parameter.
+
+    All constraints live on this model (not just in the form signature), so
+    the same validation applies wherever a GeneralFormParams is constructed.
     """
 
-    xml_keep_tags: bool
-    languages: Optional[List[str]]
-    ocr_languages: Optional[List[str]]
-    skip_infer_table_types: Optional[List[str]]
-    gz_uncompressed_content_type: Optional[str]
-    output_format: str
-    coordinates: bool
-    encoding: str
-    content_type: Optional[str]
-    hi_res_model_name: Optional[str]
-    include_page_breaks: bool
-    pdf_infer_table_structure: bool
-    strategy: str
-    extract_image_block_types: Optional[List[str]]
-    unique_element_ids: bool
+    model_config = ConfigDict(extra="forbid")
+
+    xml_keep_tags: bool = False
+    languages: Optional[List[str]] = None
+    ocr_languages: Optional[List[str]] = None
+    skip_infer_table_types: Optional[List[str]] = None
+    gz_uncompressed_content_type: Optional[str] = None
+    output_format: Literal["application/json", "text/csv"] = "application/json"
+    coordinates: bool = False
+    encoding: str = "utf-8"
+    content_type: Optional[str] = None
+    hi_res_model_name: Optional[str] = None
+    include_page_breaks: bool = False
+    pdf_infer_table_structure: bool = True
+    strategy: Literal["fast", "hi_res", "auto", "ocr_only"] = "auto"
+    extract_image_block_types: Optional[List[str]] = None
+    unique_element_ids: bool = False
     # -- chunking options --
-    chunking_strategy: Optional[str]
-    combine_under_n_chars: Optional[int]
-    max_characters: int
-    multipage_sections: bool
-    new_after_n_chars: Optional[int]
-    overlap: int
-    overlap_all: bool
-    starting_page_number: Optional[int] = None
-    delete_emails: bool
-    delete_credit_cards: bool
-    delete_phone_numbers: bool
-    clean_bullet_points: bool
-    clean_numbered_list: bool
-    clean_dashes: bool
-    clean_whitespaces: bool
-    include_slide_notes: bool
+    chunking_strategy: Optional[Literal["by_title", "basic"]] = None
+    combine_under_n_chars: Optional[int] = Field(None, ge=0, le=MAX_CHUNK_CHARACTERS)
+    max_characters: int = Field(500, ge=1, le=MAX_CHUNK_CHARACTERS)
+    multipage_sections: bool = True
+    new_after_n_chars: Optional[int] = Field(None, ge=0, le=MAX_CHUNK_CHARACTERS)
+    overlap: int = Field(0, ge=0, le=MAX_CHUNK_CHARACTERS)
+    overlap_all: bool = False
+    starting_page_number: Optional[int] = Field(None, ge=1, le=1_000_000)
+    delete_emails: bool = False
+    delete_credit_cards: bool = False
+    delete_phone_numbers: bool = False
+    clean_bullet_points: bool = False
+    clean_numbered_list: bool = False
+    clean_dashes: bool = False
+    clean_whitespaces: bool = False
+    include_slide_notes: bool = True
+
+    # -- field validators -----------------------------------------------------
+
+    @field_validator(
+        "languages", "ocr_languages", "skip_infer_table_types", "extract_image_block_types"
+    )
+    @classmethod
+    def _check_token_lists(cls, v: Optional[List[str]], info) -> Optional[List[str]]:
+        return _validate_token_list(v, info.field_name)
+
+    @field_validator("hi_res_model_name")
+    @classmethod
+    def _check_model_name(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not _SIMPLE_TOKEN_RE.match(v):
+            raise ValueError("hi_res_model_name contains invalid characters")
+        return v
+
+    @field_validator("content_type", "gz_uncompressed_content_type")
+    @classmethod
+    def _check_mime(cls, v: Optional[str], info) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.split(";")[0].strip().lower()
+        if not _MIME_TYPE_RE.match(v):
+            raise ValueError(f"{info.field_name} must be a MIME type like type/subtype")
+        return v
+
+    @field_validator("encoding")
+    @classmethod
+    def _check_encoding(cls, v: str) -> str:
+        """The encoding is caller-controlled and later passed to .decode();
+        an unknown codec name would surface as a 500 deep inside partitioning.
+        Reject non-text codecs (e.g. base64, zlib) as well: those are
+        bytes-to-bytes transformers, not text encodings."""
+        try:
+            info = codecs.lookup(v)
+        except LookupError:
+            raise ValueError(f"Unknown encoding: {v!r}") from None
+        if not getattr(info, "_is_text_encoding", True):
+            raise ValueError(f"{v!r} is not a text encoding")
+        return info.name
+
+    # -- cross-field validation -------------------------------------------------
+
+    @model_validator(mode="after")
+    def _check_chunking_coherence(self) -> "GeneralFormParams":
+        if self.overlap >= self.max_characters:
+            raise ValueError(
+                "overlap must be smaller than max_characters "
+                f"({self.overlap} >= {self.max_characters})"
+            )
+        if (
+            self.new_after_n_chars is not None
+            and self.new_after_n_chars > self.max_characters
+        ):
+            raise ValueError(
+                "new_after_n_chars (soft max) cannot exceed max_characters (hard max)"
+            )
+        if (
+            self.combine_under_n_chars is not None
+            and self.combine_under_n_chars > self.max_characters
+        ):
+            raise ValueError("combine_under_n_chars cannot exceed max_characters")
+        return self
 
     @classmethod
     def as_form(
@@ -57,40 +158,40 @@ class GeneralFormParams(BaseModel):
             BeforeValidator(SmartValueParser[bool]().value_or_first_element),
         ] = False,
         languages: Annotated[
-            List[str],
+            Optional[List[str]],
             Form(
-                title="OCR Languages",
+                title="Languages",
                 description="The languages present in the document, for use in partitioning and/or OCR",
-                example="[eng]",
+                examples=["[eng]"],
             ),
             BeforeValidator(SmartValueParser[List[str]]().value_or_first_element),
-        ] = [],  # noqa
+        ] = None,
         ocr_languages: Annotated[
-            List[str],
+            Optional[List[str]],
             Form(
                 title="OCR Languages",
-                description="The languages present in the document, for use in partitioning and/or OCR",
-                example="[eng]",
+                description="The languages to use for OCR",
+                examples=["[eng]"],
             ),
             BeforeValidator(SmartValueParser[List[str]]().value_or_first_element),
-        ] = [],
+        ] = None,
         skip_infer_table_types: Annotated[
-            List[str],
+            Optional[List[str]],
             Form(
                 title="Skip Infer Table Types",
                 description=(
                     "The document types that you want to skip table extraction with. Default: []"
                 ),
-                example="['pdf', 'jpg', 'png']",
+                examples=["['pdf', 'jpg', 'png']"],
             ),
             BeforeValidator(SmartValueParser[List[str]]().value_or_first_element),
-        ] = [],  # noqa
+        ] = None,
         gz_uncompressed_content_type: Annotated[
             Optional[str],
             Form(
                 title="Uncompressed Content Type",
                 description="If file is gzipped, use this content type after unzipping",
-                example="application/pdf",
+                examples=["application/pdf"],
             ),
         ] = None,
         output_format: Annotated[
@@ -98,7 +199,7 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="Output Format",
                 description="The format of the response. Supported formats are application/json and text/csv. Default: application/json.",
-                example="application/json",
+                examples=["application/json"],
             ),
         ] = "application/json",
         coordinates: Annotated[
@@ -114,7 +215,7 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="Content type",
                 description="A hint about the content type to use (such as text/markdown), when there are problems processing a specific file. This value is a MIME type in the format type/subtype.",
-                example="text/markdown",
+                examples=["text/markdown"],
             ),
             BeforeValidator(SmartValueParser[str]().value_or_first_element),
         ] = None,
@@ -123,7 +224,7 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="Encoding",
                 description="The encoding method used to decode the text input. Default: utf-8",
-                example="utf-8",
+                examples=["utf-8"],
             ),
             BeforeValidator(SmartValueParser[str]().value_or_first_element),
         ] = "utf-8",
@@ -132,7 +233,7 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="Hi Res Model Name",
                 description="The name of the inference model used when strategy is hi_res",
-                example="yolox",
+                examples=["yolox"],
             ),
             BeforeValidator(SmartValueParser[str]().value_or_first_element),
         ] = None,
@@ -142,7 +243,7 @@ class GeneralFormParams(BaseModel):
                 title="Include Page Breaks",
                 description="If True, the output will include page breaks if the filetype supports it. Default: false",
             ),
-            BeforeValidator(SmartValueParser[str]().value_or_first_element),
+            BeforeValidator(SmartValueParser[bool]().value_or_first_element),
         ] = False,
         pdf_infer_table_structure: Annotated[
             bool,
@@ -160,27 +261,27 @@ class GeneralFormParams(BaseModel):
             Literal["fast", "hi_res", "auto", "ocr_only"],
             Form(
                 title="Strategy",
-                description="The strategy to use for partitioning PDF/image. Options are fast, hi_res, auto. Default: auto",
+                description="The strategy to use for partitioning PDF/image. Options are fast, hi_res, auto, ocr_only. Default: auto",
                 examples=["auto", "hi_res"],
             ),
             BeforeValidator(SmartValueParser[str]().literal_value_stripped_or_first_element),
         ] = "auto",
         extract_image_block_types: Annotated[
-            List[str],
+            Optional[List[str]],
             Form(
                 title="Image block types to extract",
                 description="The types of elements to extract, for use in extracting image blocks as base64 encoded data stored in metadata fields",
-                example="""["image", "table"]""",
+                examples=["""["image", "table"]"""],
             ),
             BeforeValidator(SmartValueParser[List[str]]().value_or_first_element),
-        ] = [],  # noqa
+        ] = None,
         unique_element_ids: Annotated[
             bool,
             Form(
                 title="unique_element_ids",
                 description="""When `True`, assign UUIDs to element IDs, which guarantees their uniqueness 
 (useful when using them as primary keys in database). Otherwise a SHA-256 of element text is used. Default: False""",
-                example=True,
+                examples=[True],
             ),
         ] = False,
         # -- chunking options --
@@ -197,15 +298,15 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="Combine Under N Chars",
                 description="If chunking strategy is set, combine elements until a section reaches a length of n chars. Default: 500",
-                example=500,
+                examples=[500],
             ),
         ] = None,
         max_characters: Annotated[
             int,
             Form(
                 title="Max Characters",
-                description="If chunking strategy is set, cut off new sections after reaching a length of n chars (hard max). Default: 1500",
-                example=1500,
+                description="If chunking strategy is set, cut off new sections after reaching a length of n chars (hard max). Default: 500",
+                examples=[1500],
             ),
         ] = 500,
         multipage_sections: Annotated[
@@ -220,7 +321,7 @@ class GeneralFormParams(BaseModel):
             Form(
                 title="New after n chars",
                 description="If chunking strategy is set, cut off new sections after reaching a length of n chars (soft max). Default: 1500",
-                example=1500,
+                examples=[1500],
             ),
         ] = None,
         overlap: Annotated[
@@ -230,7 +331,7 @@ class GeneralFormParams(BaseModel):
                 description="""Specifies the length of a string ("tail") to be drawn from each chunk and prefixed to the
 next chunk as a context-preserving mechanism. By default, this only applies to split-chunks
 where an oversized element is divided into multiple chunks by text-splitting. Default: 0""",
-                example=20,
+                examples=[20],
             ),
         ] = 0,
         overlap_all: Annotated[
@@ -240,7 +341,7 @@ where an oversized element is divided into multiple chunks by text-splitting. De
                 description="""When `True`, apply overlap between "normal" chunks formed from whole
 elements and not subject to text-splitting. Use this with caution as it entails a certain
 level of "pollution" of otherwise clean semantic chunk boundaries. Default: False""",
-                example=True,
+                examples=[True],
             ),
         ] = False,
         starting_page_number: Annotated[
@@ -251,7 +352,7 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
                     "When PDF is split into pages before sending it into the API, providing "
                     "this information will allow the page number to be assigned correctly."
                 ),
-                example=3,
+                examples=[3],
             ),
         ] = None,
         delete_emails: Annotated[
@@ -311,45 +412,65 @@ level of "pollution" of otherwise clean semantic chunk boundaries. Default: Fals
                     "When `True`, slide notes from .ppt and .pptx files"
                     " will be included in the response. Default: `True`"
                 ),
-                example=False,
+                examples=[False],
             ),
         ] = True,
     ) -> "GeneralFormParams":
-        return cls(
-            xml_keep_tags=xml_keep_tags,
-            languages=languages if languages else None,
-            ocr_languages=ocr_languages if ocr_languages else None,
-            skip_infer_table_types=skip_infer_table_types,
-            gz_uncompressed_content_type=gz_uncompressed_content_type,
-            output_format=output_format,
-            coordinates=coordinates,
-            content_type=content_type,
-            encoding=encoding,
-            hi_res_model_name=hi_res_model_name,
-            include_page_breaks=include_page_breaks,
-            pdf_infer_table_structure=pdf_infer_table_structure,
-            strategy=strategy,
-            extract_image_block_types=(
-                extract_image_block_types if extract_image_block_types else None
-            ),
-            chunking_strategy=chunking_strategy,
-            combine_under_n_chars=combine_under_n_chars,
-            max_characters=max_characters,
-            multipage_sections=multipage_sections,
-            new_after_n_chars=new_after_n_chars,
-            overlap=overlap,
-            overlap_all=overlap_all,
-            unique_element_ids=unique_element_ids,
-            starting_page_number=starting_page_number,
-            delete_emails=delete_emails,
-            delete_credit_cards=delete_credit_cards,
-            delete_phone_numbers=delete_phone_numbers,
-            clean_bullet_points=clean_bullet_points,
-            clean_numbered_list=clean_numbered_list,
-            clean_dashes=clean_dashes,
-            clean_whitespaces=clean_whitespaces,
-            include_slide_notes=include_slide_notes,
-        )
+        try:
+            return cls(
+                xml_keep_tags=xml_keep_tags,
+                languages=languages if languages else None,
+                ocr_languages=ocr_languages if ocr_languages else None,
+                skip_infer_table_types=(
+                    skip_infer_table_types if skip_infer_table_types else None
+                ),
+                gz_uncompressed_content_type=gz_uncompressed_content_type,
+                output_format=output_format,
+                coordinates=coordinates,
+                content_type=content_type,
+                encoding=encoding,
+                hi_res_model_name=hi_res_model_name,
+                include_page_breaks=include_page_breaks,
+                pdf_infer_table_structure=pdf_infer_table_structure,
+                strategy=strategy,
+                extract_image_block_types=(
+                    extract_image_block_types if extract_image_block_types else None
+                ),
+                chunking_strategy=chunking_strategy,
+                combine_under_n_chars=combine_under_n_chars,
+                max_characters=max_characters,
+                multipage_sections=multipage_sections,
+                new_after_n_chars=new_after_n_chars,
+                overlap=overlap,
+                overlap_all=overlap_all,
+                unique_element_ids=unique_element_ids,
+                starting_page_number=starting_page_number,
+                delete_emails=delete_emails,
+                delete_credit_cards=delete_credit_cards,
+                delete_phone_numbers=delete_phone_numbers,
+                clean_bullet_points=clean_bullet_points,
+                clean_numbered_list=clean_numbered_list,
+                clean_dashes=clean_dashes,
+                clean_whitespaces=clean_whitespaces,
+                include_slide_notes=include_slide_notes,
+            )
+        except ValidationError as e:
+            # A ValidationError raised inside a dependency is NOT translated
+            # by FastAPI — it surfaces as a 500. Convert it to the 422 the
+            # caller should get. Rebuild the detail by hand: e.errors() can
+            # embed raw exception objects in "ctx", which JSONResponse
+            # cannot serialize.
+            raise HTTPException(
+                status_code=422,
+                detail=[
+                    {
+                        "loc": list(err.get("loc", ())),
+                        "msg": err.get("msg"),
+                        "type": err.get("type"),
+                    }
+                    for err in e.errors()
+                ],
+            ) from None
 
 
 class PartitionResponseMetadata(BaseModel):
@@ -366,8 +487,8 @@ class PartitionResponse(BaseModel):
     documents: list[dict]
     metadata: PartitionResponseMetadata
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "documents": [
                     {
@@ -385,6 +506,13 @@ class PartitionResponse(BaseModel):
                         },
                     }
                 ],
-                "metadata": {"key": "value"},
+                "metadata": {
+                    "words_count": 66,
+                    "characters_count": 421,
+                    "sentences_count": 3,
+                    "paragraphs_count": 6,
+                    "tokens_count": 104,
+                },
             }
         }
+    )
