@@ -12,11 +12,7 @@ GIT_COMMIT=$(git rev-parse HEAD)
 
 DOCKER_REPOSITORY=ghcr.io/orq-ai/unstructured-api
 DOCKER_IMAGE=ghcr.io/orq-ai/unstructured-api:${GIT_COMMIT}
-DOCKER_BUILD_REPOSITORY=ghcr.io/orq-ai/unstructured-api
-PACKAGE="unstructured-api"
-PIPELINE_FAMILY="general"
 PIP_VERSION="22.2.1"
-PYTHON_VERSION="3.10"
 
 DOCKER_BUILD_CMD=(
   docker buildx build --load -f Dockerfile
