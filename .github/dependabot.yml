@@ -4,6 +4,10 @@ updates:
     directory: "/requirements"
     schedule:
       interval: "daily"
+    # Don't pick up brand-new releases immediately; supply-chain compromises
+    # are usually caught within days
+    cooldown:
+      default-days: 7
     # Only use this to bump our libraries
     allow:
       - dependency-name: "unstructured[local-inference]"
@@ -14,3 +18,5 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
