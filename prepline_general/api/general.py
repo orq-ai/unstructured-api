@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import gzip
 import io
 import json
@@ -11,31 +12,26 @@ from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import IO, Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union, cast
-from unstructured.cleaners.core import clean
 
 import backoff
 import pandas as pd
 import psutil
 import requests
-import tiktoken
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, UploadFile, status
-from .auth import require_orq_workspace
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.errors import FileNotDecryptedError, PdfReadError
 from starlette.datastructures import Headers
 from starlette.types import Send
+from unstructured.cleaners.core import clean
 from unstructured.documents.elements import Element
 from unstructured.partition.auto import partition
 from unstructured.partition.utils.constants import PartitionStrategy
-from unstructured.staging.base import (
-    convert_to_dataframe,
-    convert_to_isd,
-    elements_from_json,
-)
+from unstructured.staging.base import convert_to_dataframe, convert_to_isd, elements_from_json
 from unstructured_inference.models.base import UnknownModelException  # type: ignore
 
-from prepline_general.api.filetypes import get_validated_mimetype
+from .auth import require_orq_workspace
+from prepline_general.api.filetypes import MAX_UPLOAD_SIZE_BYTES, get_validated_mimetype
 from prepline_general.api.models.form_params import (
     GeneralFormParams,
     PartitionResponse,
@@ -45,34 +41,52 @@ from prepline_general.api.utils import (
     clean_credit_card_numbers,
     clean_emails,
     clean_phone_numbers,
-    count_words,
-    count_sentences,
-    count_paragraphs,
     count_characters,
+    count_paragraphs,
+    count_sentences,
+    count_words,
 )
 
 app = FastAPI()
 router = APIRouter()
-tokenizer = tiktoken.get_encoding("o200k_base")
-
-
-def is_compatible_response_type(media_type: str, response_type: type) -> bool:
-    """True when `response_type` can be converted to `media_type` for HTTP Response."""
-    return (
-        False
-        if media_type == "application/json" and response_type not in [dict, list]
-        else False if media_type == "text/csv" and response_type != str else True
-    )
-
 
 logger = logging.getLogger("unstructured_api")
 
+# Upstream call timeouts: (connect, read). Without these, one hung parallel
+# worker pins its thread forever.
+_REMOTE_TIMEOUT = (
+    int(os.environ.get("UNSTRUCTURED_PARALLEL_CONNECT_TIMEOUT", 10)),
+    int(os.environ.get("UNSTRUCTURED_PARALLEL_READ_TIMEOUT", 300)),
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _get_tokenizer():
+    """Lazily load the tokenizer.
+
+    tiktoken.get_encoding() downloads the vocabulary on first use; doing that
+    at module import time made the service fail to boot in any environment
+    without egress. Fall back to whitespace token counting if unavailable.
+    """
+    try:
+        import tiktoken
+
+        return tiktoken.get_encoding("o200k_base")
+    except Exception:
+        logger.warning("tiktoken unavailable; falling back to whitespace token counts")
+        return None
+
+
+def _count_tokens(text: str) -> int:
+    tokenizer = _get_tokenizer()
+    if tokenizer is None:
+        return len(text.split())
+    return len(tokenizer.encode(text, disallowed_special=()))
+
 
 def get_pdf_splits(pdf_pages: Sequence[PageObject], split_size: int = 1):
-    """Given a pdf (PdfReader) with n pages, split it into pdfs each with split_size # of pages.
-
-    Return the files with their page offset in the form [(BytesIO, int)]
-    """
+    """Given a pdf (PdfReader) with n pages, split it into pdfs each with
+    split_size # of pages. Yields (pdf_bytes, page_offset) tuples."""
     offset = 0
 
     while offset < len(pdf_pages):
@@ -90,10 +104,8 @@ def get_pdf_splits(pdf_pages: Sequence[PageObject], split_size: int = 1):
         offset += split_size
 
 
-# Do not retry with these status codes
 def is_non_retryable(e: Exception) -> bool:
-    # -- `Exception` doesn't have a `.status_code` attribute so the check of status-code would
-    # -- itself raise `AttributeError` when e is say ValueError or TypeError, etc.
+    """Do not retry client errors; retry everything else (5xx, timeouts)."""
     if not isinstance(e, HTTPException):
         return True
     return 400 <= e.status_code < 500
@@ -101,7 +113,7 @@ def is_non_retryable(e: Exception) -> bool:
 
 @backoff.on_exception(
     backoff.expo,
-    HTTPException,
+    (HTTPException, requests.ConnectionError, requests.Timeout),
     max_tries=int(os.environ.get("UNSTRUCTURED_PARALLEL_RETRY_ATTEMPTS", 2)) + 1,
     giveup=is_non_retryable,
     logger=logger,
@@ -110,11 +122,16 @@ def call_api(
     request_url: str,
     api_key: str,
     filename: str,
-    file: IO[bytes],
+    file: bytes,
     content_type: str,
     **partition_kwargs: Any,
 ) -> str:
-    """Call the api with the given request_url."""
+    """Call the api with the given request_url.
+
+    `file` is bytes (not a stream) so that backoff retries resend the full
+    content — a stream would be at EOF on the second attempt and silently
+    send an empty file.
+    """
     headers = {"unstructured-api-key": api_key}
 
     response = requests.post(
@@ -122,17 +139,21 @@ def call_api(
         files={"files": (filename, file, content_type)},
         data=partition_kwargs,
         headers=headers,
+        timeout=_REMOTE_TIMEOUT,
     )
 
     if response.status_code != 200:
-        detail = response.json().get("detail") or response.text
+        try:
+            detail = response.json().get("detail") or response.text
+        except ValueError:  # error body was not JSON
+            detail = response.text
         raise HTTPException(status_code=response.status_code, detail=detail)
 
     return response.text
 
 
 def partition_file_via_api(
-    file_tuple: Tuple[IO[bytes], int],
+    file_tuple: Tuple[bytes, int],
     request: Request,
     filename: str,
     content_type: str,
@@ -143,7 +164,7 @@ def partition_file_via_api(
     The remote url is set by the `UNSTRUCTURED_PARALLEL_MODE_URL` environment variable.
 
     Args:
-    `file_tuple` is a file-like object and byte offset of a page (file, page_offset)
+    `file_tuple` is the raw bytes and byte offset of a page (file_bytes, page_offset)
     `request` is used to forward the api key header
     `filename` and `content_type` are passed in the file form data
     `partition_kwargs` holds any form parameters to be sent on
@@ -169,6 +190,7 @@ def partition_file_via_api(
     )
     return elements_from_json(text=result)
 
+
 def pipeline_cleanup(
     text: str,
     delete_emails: bool = False,
@@ -179,7 +201,6 @@ def pipeline_cleanup(
     clean_dashes: bool = False,
     clean_whitespaces: bool = False,
 ) -> str:
-
     text = clean(
         text=text,
         bullets=clean_bullet_points,
@@ -212,12 +233,6 @@ def partition_pdf_splits(
 
     Or partition locally if the chunk is small enough. As soon as any remote call fails, bubble up
     the error.
-
-    Arguments:
-    request is used to forward relevant headers to the api calls
-    file, metadata_filename and content_type are passed on in the file argument to requests.post
-    coordinates is passed on to the api calls, but cannot be used in the local partition case
-    partition_kwargs holds any others parameters that will be forwarded, or passed to partition
     """
     pages_per_pdf = int(os.environ.get("UNSTRUCTURED_PARALLEL_MODE_SPLIT_SIZE", 1))
 
@@ -286,13 +301,15 @@ def pipeline_api(
     clean_dashes: bool = False,
     clean_whitespaces: bool = False,
     include_slide_notes: Optional[bool] = True,
-) -> PartitionResponse:
-    if filename.endswith(".msg"):
-        # Note(yuming): convert file type for msg files
-        # since fast api might sent the wrong one.
-        file_content_type = "application/x-ole-storage"
+) -> Union[PartitionResponse, str]:
+    # NOTE: the previous `.msg` special case that rewrote file_content_type to
+    # application/x-ole-storage based on the *filename* is intentionally gone.
+    # file_content_type comes from get_validated_mimetype (byte-sniffed and
+    # allow-listed); letting an attacker-chosen extension overwrite it after
+    # the fact re-opened the exact parser-confusion hole that validation closed.
 
-    # We don't want to keep logging the same params for every parallel call
+    # X-Forwarded-For is client-controlled; this only reduces debug-log noise
+    # from our own parallel sub-requests, so spoofing it gains nothing.
     is_internal_request = (
         (
             request.headers.get("X-Forwarded-For")
@@ -304,46 +321,44 @@ def pipeline_api(
 
     if not is_internal_request:
         logger.debug(
-            "pipeline_api input params: {}".format(
-                json.dumps(
-                    {
-                        "filename": filename,
-                        "response_type": response_type,
-                        "coordinates": coordinates,
-                        "encoding": encoding,
-                        "hi_res_model_name": hi_res_model_name,
-                        "include_page_breaks": include_page_breaks,
-                        "ocr_languages": ocr_languages,
-                        "pdf_infer_table_structure": pdf_infer_table_structure,
-                        "skip_infer_table_types": skip_infer_table_types,
-                        "strategy": strategy,
-                        "xml_keep_tags": xml_keep_tags,
-                        "languages": languages,
-                        "extract_image_block_types": extract_image_block_types,
-                        "unique_element_ids": unique_element_ids,
-                        "chunking_strategy": chunking_strategy,
-                        "combine_under_n_chars": combine_under_n_chars,
-                        "max_characters": max_characters,
-                        "multipage_sections": multipage_sections,
-                        "new_after_n_chars": new_after_n_chars,
-                        "overlap": overlap,
-                        "overlap_all": overlap_all,
-                        "starting_page_number": starting_page_number,
-                        "delete_emails": delete_emails,
-                        "delete_credit_cards": delete_credit_cards,
-                        "delete_phone_numbers": delete_phone_numbers,
-                        "clean_bullet_points": clean_bullet_points,
-                        "clean_numbered_list": clean_numbered_list,
-                        "clean_dashes": clean_dashes,
-                        "clean_whitespaces": clean_whitespaces,
-                        "include_slide_notes": include_slide_notes,
-                    },
-                    default=str,
-                )
-            )
+            "pipeline_api input params: %s",
+            json.dumps(
+                {
+                    "filename": filename,
+                    "response_type": response_type,
+                    "coordinates": coordinates,
+                    "encoding": encoding,
+                    "hi_res_model_name": hi_res_model_name,
+                    "include_page_breaks": include_page_breaks,
+                    "ocr_languages": ocr_languages,
+                    "pdf_infer_table_structure": pdf_infer_table_structure,
+                    "skip_infer_table_types": skip_infer_table_types,
+                    "strategy": strategy,
+                    "xml_keep_tags": xml_keep_tags,
+                    "languages": languages,
+                    "extract_image_block_types": extract_image_block_types,
+                    "unique_element_ids": unique_element_ids,
+                    "chunking_strategy": chunking_strategy,
+                    "combine_under_n_chars": combine_under_n_chars,
+                    "max_characters": max_characters,
+                    "multipage_sections": multipage_sections,
+                    "new_after_n_chars": new_after_n_chars,
+                    "overlap": overlap,
+                    "overlap_all": overlap_all,
+                    "starting_page_number": starting_page_number,
+                    "delete_emails": delete_emails,
+                    "delete_credit_cards": delete_credit_cards,
+                    "delete_phone_numbers": delete_phone_numbers,
+                    "clean_bullet_points": clean_bullet_points,
+                    "clean_numbered_list": clean_numbered_list,
+                    "clean_dashes": clean_dashes,
+                    "clean_whitespaces": clean_whitespaces,
+                    "include_slide_notes": include_slide_notes,
+                },
+                default=str,
+            ),
         )
-
-        logger.debug(f"filetype: {file_content_type}")
+        logger.debug("filetype: %s", file_content_type)
 
     _check_free_memory()
 
@@ -352,6 +367,8 @@ def pipeline_api(
         file.seek(0)
 
     strategy = _validate_strategy(strategy)
+    # partition() iterates skip_infer_table_types; None blows up inside auto.py
+    skip_infer_table_types = skip_infer_table_types or []
     pdf_infer_table_structure = _set_pdf_infer_table_structure(
         pdf_infer_table_structure,
         strategy,
@@ -359,48 +376,17 @@ def pipeline_api(
     )
 
     # Parallel mode is set by env variable
-    enable_parallel_mode = os.environ.get("UNSTRUCTURED_PARALLEL_MODE_ENABLED", "false")
-    pdf_parallel_mode_enabled = enable_parallel_mode == "true"
+    pdf_parallel_mode_enabled = (
+        os.environ.get("UNSTRUCTURED_PARALLEL_MODE_ENABLED", "false") == "true"
+    )
     if starting_page_number is None:
         starting_page_number = 1
 
-    ocr_languages_str = "+".join(ocr_languages) if ocr_languages and len(ocr_languages) else None
+    ocr_languages_str = "+".join(ocr_languages) if ocr_languages else None
 
     extract_image_block_to_payload = bool(extract_image_block_types)
 
     try:
-        logger.debug(
-            "partition input data: {}".format(
-                json.dumps(
-                    {
-                        "content_type": file_content_type,
-                        "strategy": strategy,
-                        "ocr_languages": ocr_languages_str,
-                        "coordinates": coordinates,
-                        "pdf_infer_table_structure": pdf_infer_table_structure,
-                        "include_page_breaks": include_page_breaks,
-                        "encoding": encoding,
-                        "hi_res_model_name": hi_res_model_name,
-                        "xml_keep_tags": xml_keep_tags,
-                        "skip_infer_table_types": skip_infer_table_types,
-                        "languages": languages,
-                        "chunking_strategy": chunking_strategy,
-                        "multipage_sections": multipage_sections,
-                        "combine_under_n_chars": combine_under_n_chars,
-                        "new_after_n_chars": new_after_n_chars,
-                        "max_characters": max_characters,
-                        "overlap": overlap,
-                        "overlap_all": overlap_all,
-                        "extract_image_block_types": extract_image_block_types,
-                        "extract_image_block_to_payload": extract_image_block_to_payload,
-                        "unique_element_ids": unique_element_ids,
-                        "include_slide_notes": include_slide_notes,
-                    },
-                    default=str,
-                )
-            )
-        )
-
         partition_kwargs = {
             "file": file,
             "metadata_filename": filename,
@@ -430,17 +416,13 @@ def pipeline_api(
 
         if file_content_type == "application/pdf" and pdf_parallel_mode_enabled:
             pdf = PdfReader(file)
-            partition_kwargs['strategy'] = PartitionStrategy.FAST
+            partition_kwargs["strategy"] = PartitionStrategy.FAST
             elements = partition_pdf_splits(
                 request=request,
                 pdf_pages=pdf.pages,
                 coordinates=coordinates,
                 **partition_kwargs,  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
             )
-        # if file_content_type == "application/pdf":
-        #     partition_kwargs['strategy'] = PartitionStrategy.FAST
-
-        #     elements = partition_pdf(**partition_kwargs)
         else:
             elements = partition(**partition_kwargs)  # type: ignore # pyright: ignore[reportGeneralTypeIssues]
 
@@ -457,10 +439,13 @@ def pipeline_api(
                 ),
             )
 
-        # OSError isn't caught by our top level handler, so convert it here
+        # OSError isn't caught by our top level handler. Log the specifics
+        # server-side; str(e) routinely contains internal filesystem paths
+        # and must not go to the caller.
+        logger.error("OSError during partitioning of %r", filename, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=str(e),
+            detail="File processing failed due to an internal error.",
         )
     except ValueError as e:
         if "Invalid file" in e.args[0]:
@@ -489,8 +474,14 @@ def pipeline_api(
             detail=f"Unknown model type: {hi_res_model_name}",
         )
 
-    # Clean up returned elements
-    # Note(austin): pydantic should control this sort of thing for us
+    # Clean up returned elements.
+    #
+    # NOTE: this used to `elements.pop(i)` inside `enumerate(elements)` to drop
+    # empty elements. Removing items from a list while enumerating it shifts
+    # every later index, so the element immediately AFTER each empty one was
+    # silently skipped — never cleaned, never counted, and (because it was
+    # skipped) dropped from the response entirely. Real content loss. We now
+    # filter without mutating the list being iterated.
 
     words_count = 0
     sentences_count = 0
@@ -499,18 +490,14 @@ def pipeline_api(
     characters_count = 0
 
     final_elements: list[Element] = []
+    base_filename = os.path.basename(filename)
 
-    for i, element in enumerate(elements):
-
-        # If the text of the element is empty or length is 0, we don't want to keep it
-        if not element.text or len(element.text) == 0:
-            elements.pop(i)
+    for element in elements:
+        if not element.text:
             continue
 
-        elements[i].metadata.filename = os.path.basename(filename)
-
-        elements[i].text = pipeline_cleanup(
-            elements[i].text,
+        element.text = pipeline_cleanup(
+            element.text,
             delete_emails=delete_emails,
             delete_credit_cards=delete_credit_cards,
             delete_phone_numbers=delete_phone_numbers,
@@ -519,48 +506,49 @@ def pipeline_api(
             clean_dashes=clean_dashes,
             clean_whitespaces=clean_whitespaces,
         )
+        # PII cleanup can empty an element (e.g. an element that was only an
+        # email address); drop those too rather than returning blank chunks.
+        if not element.text.strip():
+            continue
+
+        element.metadata.filename = base_filename
 
         if not coordinates and element.metadata.coordinates:
-            elements[i].metadata.coordinates = None
+            element.metadata.coordinates = None
 
         if element.metadata.last_modified:
-            elements[i].metadata.last_modified = None
+            element.metadata.last_modified = None
 
         if element.metadata.file_directory:
-            elements[i].metadata.file_directory = None
+            element.metadata.file_directory = None
 
         if element.metadata.detection_class_prob:
-            elements[i].metadata.detection_class_prob = None
+            element.metadata.detection_class_prob = None
 
         if element.metadata.orig_elements:
-            elements[i].metadata.orig_elements = None
+            element.metadata.orig_elements = None
 
-        # Add word count to metadata
         element_words_count = count_words(element.text)
-        elements[i].metadata.words_count = element_words_count
+        element.metadata.words_count = element_words_count
         words_count += element_words_count
 
-        # Add sentence count to the metadata
         element_sentence_count = count_sentences(element.text)
-        elements[i].metadata.sentences_count = element_sentence_count
+        element.metadata.sentences_count = element_sentence_count
         sentences_count += element_sentence_count
 
-        # Add paragraph count to the metadata
         element_paragraph_count = count_paragraphs(element.text)
-        elements[i].metadata.paragraphs_count = element_paragraph_count
+        element.metadata.paragraphs_count = element_paragraph_count
         paragraphs_count += element_paragraph_count
 
-        # Add the token count to the metadata
-        element_tokens_count = len(tokenizer.encode(element.text))
-        elements[i].metadata.tokens_count = element_tokens_count
+        element_tokens_count = _count_tokens(element.text)
+        element.metadata.tokens_count = element_tokens_count
         tokens_count += element_tokens_count
 
-        # Add the characters count to the metadata
         element_characters_count = count_characters(element.text)
-        elements[i].metadata.characters_count = element_characters_count
+        element.metadata.characters_count = element_characters_count
         characters_count += element_characters_count
 
-        final_elements.append(elements[i])
+        final_elements.append(element)
 
     if response_type == "text/csv":
         df = convert_to_dataframe(final_elements)
@@ -592,11 +580,12 @@ def _check_free_memory():
 
 
 def _check_pdf(file: IO[bytes]):
-    """Check if the PDF file is encrypted, otherwise assume it is not a valid PDF."""
+    """Reject encrypted or malformed PDFs with a clear client error."""
     try:
         pdf = PdfReader(file)
-
-        # This will raise if the file is encrypted
+        if pdf.is_encrypted:
+            raise FileNotDecryptedError("File has not been decrypted")
+        # This will raise if the file is encrypted with metadata protection
         pdf.metadata
         return pdf
     except FileNotDecryptedError:
@@ -675,12 +664,19 @@ class MultipartMixedResponse(StreamingResponse):
         return header_bytes
 
     def build_part(self, chunk: bytes) -> bytes:
+        """Encode one part. Every part is base64 encoded (the part headers
+        declare Content-Transfer-Encoding: base64, which previously only held
+        for str chunks — bytes chunks went out raw under a base64 header)."""
+        encoded = b64encode(chunk)
         part = self.boundary + self.CRLF
-        part_headers = {"Content-Length": len(chunk), "Content-Transfer-Encoding": "base64"}
+        part_headers = {
+            "Content-Length": len(encoded),
+            "Content-Transfer-Encoding": "base64",
+        }
         if self.content_type is not None:
             part_headers["Content-Type"] = self.content_type
         part += self._build_part_headers(part_headers)
-        part += self.CRLF + chunk + self.CRLF
+        part += self.CRLF + encoded + self.CRLF
         return part
 
     async def stream_response(self, send: Send) -> None:
@@ -694,7 +690,6 @@ class MultipartMixedResponse(StreamingResponse):
         async for chunk in self.body_iterator:
             if not isinstance(chunk, bytes):
                 chunk = chunk.encode(self.charset)  # type: ignore
-                chunk = b64encode(chunk)
             await send(
                 {"type": "http.response.body", "body": self.build_part(chunk), "more_body": True}
             )
@@ -703,20 +698,50 @@ class MultipartMixedResponse(StreamingResponse):
 
 
 def ungz_file(file: UploadFile, gz_uncompressed_content_type: Optional[str] = None) -> UploadFile:
-    def return_content_type(filename: str):
+    """Decompress a gzipped upload, bounded by MAX_UPLOAD_SIZE_BYTES.
+
+    gzip can expand ~1000x, so an unbounded `.read()` of a small .gz upload
+    was a decompression-bomb vector: a few MB on the wire ballooning into
+    gigabytes of resident memory. Decompress in chunks and stop at the same
+    cap that applies to regular uploads.
+    """
+
+    def return_content_type(filename: str) -> str:
         if gz_uncompressed_content_type:
             return gz_uncompressed_content_type
-        else:
-            return str(mimetypes.guess_type(filename)[0])
+        guessed = mimetypes.guess_type(filename)[0]
+        # str(None) == "None" previously went out as the content-type header.
+        return guessed or "application/octet-stream"
 
     filename = str(file.filename) if file.filename else ""
     if filename.endswith(".gz"):
         filename = filename[:-3]
 
-    gzip_file = gzip.open(file.file).read()
+    decompressed = io.BytesIO()
+    total = 0
+    try:
+        with gzip.open(file.file) as gz:
+            while True:
+                chunk = gz.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_SIZE_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "Uncompressed file exceeds the maximum size of "
+                            f"{MAX_UPLOAD_SIZE_BYTES} bytes."
+                        ),
+                    )
+                decompressed.write(chunk)
+    except (gzip.BadGzipFile, OSError, EOFError):
+        raise HTTPException(status_code=422, detail="File is not a valid gzip archive")
+
+    decompressed.seek(0)
     return UploadFile(
-        file=io.BytesIO(gzip_file),
-        size=len(gzip_file),
+        file=decompressed,
+        size=total,
         filename=filename,
         headers=Headers({"content-type": return_content_type(filename)}),
     )
@@ -753,6 +778,9 @@ def general_partition(
     form_params: GeneralFormParams = Depends(GeneralFormParams.as_form),
     workspace_id: str = Depends(require_orq_workspace),
 ):
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded")
+
     accept_type = request.headers.get("Accept")
 
     # -- detect response content-type conflict when multiple files are uploaded --
@@ -771,6 +799,10 @@ def general_partition(
             detail=f"Conflict in media type {accept_type} with response type 'multipart/mixed'.\n",
             status_code=status.HTTP_406_NOT_ACCEPTABLE,
         )
+
+    logger.info(
+        "partition request: workspace=%s files=%d", workspace_id, len(files)
+    )
 
     # -- validate other arguments --
     chunking_strategy = _validate_chunking_strategy(form_params.chunking_strategy)
@@ -827,35 +859,34 @@ def general_partition(
                 include_slide_notes=form_params.include_slide_notes,
             )
 
-            yield (
-                json.dumps(response)
-                if is_multipart and type(response) not in [str, bytes]
-                else (
-                    PlainTextResponse(response)
-                    if not is_multipart and form_params.output_format == "text/csv"
-                    else response
+            if is_multipart:
+                # json.dumps(PartitionResponse) raises TypeError — pydantic
+                # models are not JSON serializable — so every multipart/mixed
+                # JSON request previously 500'd.
+                yield (
+                    response
+                    if isinstance(response, (str, bytes))
+                    else response.model_dump_json()
                 )
-            )
+            elif form_params.output_format == "text/csv":
+                yield PlainTextResponse(response, media_type="text/csv")
+            else:
+                yield response
 
     def join_responses(
-        responses: Sequence[str | List[Dict[str, Any]] | PlainTextResponse]
-    ) -> List[str | List[Dict[str, Any]]] | PlainTextResponse:
+        responses: Sequence[str | PartitionResponse | PlainTextResponse],
+    ) -> List[PartitionResponse] | PlainTextResponse:
         """Consolidate partitionings from multiple documents into single response payload."""
         if form_params.output_format != "text/csv":
-            return cast(List[Union[str, List[Dict[str, Any]]]], responses)
+            return cast(List[PartitionResponse], responses)
         responses = cast(List[PlainTextResponse], responses)
-        data = pd.read_csv(  # pyright: ignore[reportUnknownMemberType]
-            io.BytesIO(responses[0].body)
-        )
-        if len(responses) > 1:
-            for resp in responses[1:]:
-                resp_data = pd.read_csv(  # pyright: ignore[reportUnknownMemberType]
-                    io.BytesIO(resp.body)
-                )
-                data = data.merge(  # pyright: ignore[reportUnknownMemberType]
-                    resp_data, how="outer"
-                )
-        return PlainTextResponse(data.to_csv())
+        # NOTE: this used merge(how="outer"), which joins on ALL columns and
+        # therefore de-duplicates: identical rows across documents (or within
+        # one) collapsed to a single row, silently dropping elements. concat
+        # is the correct "stack these tables" operation.
+        frames = [pd.read_csv(io.BytesIO(resp.body)) for resp in responses]
+        data = pd.concat(frames, ignore_index=True)
+        return PlainTextResponse(data.to_csv(index=False), media_type="text/csv")
 
     return (
         MultipartMixedResponse(
@@ -868,5 +899,6 @@ def general_partition(
             else join_responses(list(response_generator(is_multipart=False)))
         )
     )
+
 
 app.include_router(router)
