@@ -1,238 +1,306 @@
 import json
 import re
-from typing import TypeVar, Union, List, Generic, get_origin, get_args, Any, Tuple, Dict
-from unstructured.cleaners.extract import extract_email_address
+from typing import Any, Dict, Generic, List, Tuple, TypeVar, Union, get_args, get_origin
 
 T = TypeVar("T")
 E = TypeVar("E")
 
+_TRUTHY_STRINGS = frozenset({"true", "1", "yes", "on"})
+
 
 def _cast_to_type(value: Any, origin_class: type) -> Any:
-    """Cast a value to a type E
-
-    Args:
-        value (Any): value to cast to a type T
-        origin_class (type): type to cast the value to. Should be one of simple types
-
-    Returns:
-        T: value cast to a type T
-    """
-    if isinstance(value, str) and (origin_class == int or origin_class == float):
-        return origin_class(value)  # noqa
-    if origin_class == bool and isinstance(value, str):
-        return value.lower() == "true"
+    """Cast a value to `origin_class` (one of the simple types)."""
+    if isinstance(value, str) and origin_class in (int, float):
+        try:
+            return origin_class(value.strip())
+        except ValueError:
+            raise ValueError(
+                f"Cannot cast {value!r} to {origin_class.__name__}"
+            ) from None
+    if origin_class is bool and isinstance(value, str):
+        return value.strip().lower() in _TRUTHY_STRINGS
     return value
 
 
-def _return_cast_first_element(values: list[E], origin_class: type) -> E | None:
-    """Return the first element of a list cast to a type T, or None if the list is empty
-
-    Args:
-        values (list[str]): list of strings
-        origin_class (type): type to cast the first element to. Should be one of simple types
-
-    Returns:
-        T | None: first element cast to a type T, or None if the list is empty
-    """
+def _return_cast_first_element(values: List[E], origin_class: type) -> Union[E, None]:
+    """Return the first element of a list cast to `origin_class`, or None if empty."""
     value = next(iter(values), None)
     if value is not None:
-        return _cast_to_type(value, origin_class)  # noqa
+        return _cast_to_type(value, origin_class)
     return value
 
 
 def is_convertible_to_list(s: str) -> Tuple[bool, Union[List, str]]:
-    """
-    Determines if a given string is convertible to a list.
+    """Determine whether a string is convertible to a list.
 
-    This function first tries to parse the string as JSON. If the parsed JSON is a list, it returns
-    True along with the list. If parsing as JSON fails, it then checks if the string can be split
-    into a list using predefined delimiters ("," or "+"). If so, it returns True and the resulting list.
-    If neither condition is met, it returns False and a message indicating the string cannot
-    be converted to a list.
-    """
+    Tries JSON first; if the parsed value is a list, returns (True, list).
+    Otherwise falls back to splitting on "," or "+". Returns (False, reason)
+    when neither applies.
 
+    Note: the original implementation tested `if delimiter in delimiters`
+    (always true), so EVERY non-JSON string — delimiter or not — came back
+    as (True, s.split("+")), e.g. "hello" -> (True, ["hello"]). The check is
+    now against the input string, and split parts are whitespace-stripped.
+    """
     try:
         result = json.loads(s)
         if isinstance(result, list):
-            return True, result  # Return the list if conversion is successful
-        else:
-            return False, "Input is valid JSON but not a list."  # Valid JSON but not a list
+            return True, result
+        return False, "Input is valid JSON but not a list."
     except json.JSONDecodeError:
-        pass  # proceed to check using delimiters if JSON parsing fails
+        pass
 
-    delimiters = ["+", ","]
-    for delimiter in delimiters:
-        if delimiter in delimiters:
-            return True, s.split(delimiter)
+    # Bracketed-but-not-JSON forms the API documents as examples: "[eng]",
+    # "['pdf', 'jpg']" (single quotes are invalid JSON).
+    stripped = s.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        inner = stripped[1:-1].strip()
+        if not inner:
+            return True, []
+        parts = [p.strip().strip("'\"").strip() for p in inner.split(",")]
+        return True, [p for p in parts if p]
 
-    return False, "Input is not valid JSON."  # Invalid JSON
+    for delimiter in (",", "+"):
+        if delimiter in s:
+            return True, [part.strip() for part in s.split(delimiter)]
+
+    return False, "Input is not valid JSON or a delimited list."
 
 
 class SmartValueParser(Generic[T]):
-    """Class handle api parameters that are passed in form of a specific value or as a list of strings from which
-    the first element is used, cast to a proper type
-    Should be parametrized with a type to which the value should be casted.
+    """Handle API parameters passed either as a specific value or as a list of
+    strings from which the first element is used, cast to the parametrized type.
 
     Examples:
         SmartValueParser[int]().value_or_first_element(value)
         SmartValueParser[list[int]]().value_or_first_element(value)
     """
 
-    def value_or_first_element(self, value: Union[T, list[T]]) -> list[T] | T | None:
-        """If value is a list, return the first element cast to a type T, otherwise return the value itself
-
-        Args:
-            value (Union[T, List[str]]): value to cast to a type T or return as is
+    def value_or_first_element(self, value: Union[T, List[T]]) -> Union[List[T], T, None]:
+        """If value is a list, return the first element cast to T; otherwise
+        return the value itself cast to T. For T=list[X], cast every element.
         """
         origin_class, container_elems_class = self._get_origin_container_classes()
-        if isinstance(value, list) and not isinstance(value, origin_class):
-            extracted_value: T | None = _return_cast_first_element(value, origin_class)
-            return extracted_value
-        elif isinstance(value, list) and origin_class == list and container_elems_class:
+        if isinstance(value, list) and origin_class is not list:
+            return _return_cast_first_element(value, origin_class)
+        if isinstance(value, list) and origin_class is list and container_elems_class:
             if len(value) == 1:
                 is_list, result = is_convertible_to_list(str(value[0]))
                 new_value = result if is_list else value
                 return [_cast_to_type(elem, container_elems_class) for elem in new_value]
             return [_cast_to_type(elem, container_elems_class) for elem in value]
-        return _cast_to_type(value, origin_class)  # noqa
-
-    def literal_value_stripped_or_first_element(self, value: str) -> str | None:
-        """Returns the value itself for literal strings and strips quotation characters.
-
-        Args:
-            value (Union[T, List[str]]): value to cast to a type T or return as is
-        """
-        origin_class, container_elems_class = self._get_origin_container_classes()
-        value = value.replace("'", "")
-        value = value.replace('"', "")
         return _cast_to_type(value, origin_class)
 
-    def _get_origin_container_classes(self) -> tuple[type, type | None]:
-        """Extracts class (and container class if it's a list) from a type hint
+    def literal_value_stripped_or_first_element(self, value: str) -> Union[str, None]:
+        """Return the literal string with surrounding quotation characters
+        stripped.
 
-        Returns:
-            tuple[type, type | None]: class and container class of the type hint
+        Only *enclosing* quote pairs are removed ('"json"' -> json). Interior
+        quotes are preserved — the previous implementation deleted every
+        quote character anywhere, corrupting values like "O'Brien".
         """
-        type_info = self.__orig_class__.__args__[0]  # type: ignore
+        origin_class, _ = self._get_origin_container_classes()
+        stripped = value.strip()
+        while (
+            len(stripped) >= 2
+            and stripped[0] == stripped[-1]
+            and stripped[0] in ("'", '"')
+        ):
+            stripped = stripped[1:-1].strip()
+        return _cast_to_type(stripped, origin_class)
+
+    def _get_origin_container_classes(self) -> Tuple[type, Union[type, None]]:
+        """Extract the class (and element class, for list types) from the
+        type parameter."""
+        orig_class = getattr(self, "__orig_class__", None)
+        if orig_class is None:
+            raise TypeError(
+                "SmartValueParser must be parametrized, e.g. SmartValueParser[int]()"
+            )
+        type_info = orig_class.__args__[0]
         origin_class = get_origin(type_info)
         if origin_class is None:
-            # it's a basic type like int or bool - return it and no container class
             return type_info, None
         origin_args = get_args(type_info)
         container_elems_class = origin_args[0] if origin_args else None
         return origin_class, container_elems_class
 
 
+# ---------------------------------------------------------------------------
+# Counting helpers
+# ---------------------------------------------------------------------------
+
 def count_characters(s: str) -> int:
-    """Count the number of characters in a string
-
-    Args:
-        s (str): string to count characters in
-
-    Returns:
-        int: number of characters in the string
-    """
+    """Number of characters in a string."""
     return len(s)
 
 
 def count_words(s: str) -> int:
-    """Count the number of words in a string
-
-    Args:
-        s (str): string to count words in
-
-    Returns:
-        int: number of words in the string
-    """
+    """Number of whitespace-separated words in a string."""
     return len(s.split())
 
 
 def count_sentences(s: str) -> int:
-    """Count the number of sentences in a string
+    """Approximate number of sentences in a string.
 
-    Args:
-        s (str): string to count sentences in
-
-    Returns:
-        int: number of sentences in the string
+    Counts runs of sentence-ending punctuation followed by whitespace or end
+    of string, so "Really?!" is one sentence (not two) and "3.14" is none.
     """
-    return s.count(".") + s.count("?") + s.count("!")
+    return len(re.findall(r"[.!?]+(?=\s|$)", s))
 
 
 def count_paragraphs(s: str) -> int:
-    """Count the number of paragraphs in a string
+    """Number of non-empty paragraphs (blocks separated by blank lines)."""
+    return len([p for p in re.split(r"\n\s*\n", s) if p.strip()])
 
-    Args:
-        s (str): string to count paragraphs in
 
-    Returns:
-        int: number of paragraphs in the string
+# ---------------------------------------------------------------------------
+# PII extraction / redaction
+#
+# These exist to strip PII before text is chunked, stored, and embedded, so
+# a silent miss is a privacy incident. Each cleaner removes text via a single
+# regex substitution over the matched span; the old extract-then-
+# str.replace() approach failed whenever the extracted form differed from
+# the literal text (normalized card numbers, lower-cased emails) and could
+# clobber unrelated occurrences of the same substring elsewhere.
+# ---------------------------------------------------------------------------
+
+# Local pattern instead of unstructured's extract_email_address, which
+# lower-cases the text first: replacing its output back into the original
+# left every mixed-case email ("John@Example.com") unredacted.
+_EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+_PHONE_PATTERN = re.compile(
+    # (?<!\d\.) / (?!\.\d) block matching inside decimals like 3.14159265
+    # without blocking a phone number followed by sentence punctuation.
+    r"(?<!\w)(?<!\d\.)(?:\+\d{1,3}[-.\s]?)?(?:\(\d{1,4}\)|\d{1,4})"
+    r"(?:[-.\s]?\d{1,4}){1,3}(?!\w)(?!\.\d)"
+)
+
+# ISO and day-first/US date shapes the phone pattern would otherwise eat.
+_DATE_LIKE = re.compile(
+    r"^(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})$"
+)
+
+# A single-dot decimal like 3.14159265 (real dotted phones have 2+ dots).
+_DECIMAL_LIKE = re.compile(r"^\d+\.\d+$")
+
+# Candidate card numbers: 13-19 digits, optionally grouped by spaces/dashes.
+_CARD_PATTERN = re.compile(r"(?<!\d)\d(?:[ -]?\d){11,18}(?!\d)")
+
+
+def _luhn_valid(digits: str) -> bool:
+    """Luhn checksum. Every real card number passes it, so requiring it
+    cannot miss a genuine card, but it spares 16-digit order IDs and other
+    look-alikes from being redacted."""
+    if not digits.isdigit() or not 13 <= len(digits) <= 19:
+        return False
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch)
+        if i % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        total += d
+    return total % 10 == 0
+
+
+def _is_phone_like(match_text: str) -> bool:
+    stripped = match_text.strip()
+    if _DATE_LIKE.match(stripped) or _DECIMAL_LIKE.match(stripped):
+        return False
+    digit_count = sum(ch.isdigit() for ch in match_text)
+    # E.164 numbers are 7-15 digits; anything shorter is almost always a
+    # quantity, year, or fragment.
+    return 7 <= digit_count <= 15
+
+
+def extract_email_addresses(text: str) -> List[str]:
+    """Extract email addresses, preserving their original casing."""
+    return _EMAIL_PATTERN.findall(text)
+
+
+def extract_phone_numbers(text: str) -> List[str]:
+    """Extract phone-number-like strings (7-15 digits, incl. international
+    formats like +34672013593), skipping date-shaped matches."""
+    return [m for m in _PHONE_PATTERN.findall(text) if _is_phone_like(m)]
+
+
+def extract_credit_card_numbers(text: str) -> List[str]:
+    """Extract Luhn-valid card numbers (13-19 digits, e.g. Visa/MC 16,
+    Amex 15), normalized to bare digits."""
+    results = []
+    for match in _CARD_PATTERN.finditer(text):
+        digits = re.sub(r"[ -]", "", match.group())
+        if _luhn_valid(digits):
+            results.append(digits)
+    return results
+
+
+def clean_emails(text: str, replacement: str = "") -> str:
+    """Remove (or replace) email addresses in the text."""
+    return _EMAIL_PATTERN.sub(replacement, text)
+
+
+def clean_phone_numbers(text: str, replacement: str = "") -> str:
+    """Remove (or replace) phone numbers in the text, leaving dates and
+    short numeric fragments intact."""
+    return _PHONE_PATTERN.sub(
+        lambda m: replacement if _is_phone_like(m.group()) else m.group(), text
+    )
+
+
+def clean_credit_card_numbers(text: str, replacement: str = "") -> str:
+    """Remove (or replace) Luhn-valid card numbers in the text.
+
+    Substitutes the matched span directly. The previous implementation
+    normalized the extracted number (stripping spaces/dashes) and then
+    str.replace()d the *normalized* form — which no longer appeared in the
+    text — so every formatted card number ("4111 1111 1111 1111") survived
+    "redaction" untouched.
     """
-    return len(s.split("\n\n"))
+    return _CARD_PATTERN.sub(
+        lambda m: replacement
+        if _luhn_valid(re.sub(r"[ -]", "", m.group()))
+        else m.group(),
+        text,
+    )
 
 
-def extract_phone_numbers(text: str):
-    # Updated pattern to include international formats like +34672013593
-    pattern = r"\b(?:\+\d{1,3}[-.\s]?)?(?:\(\d{1,4}\)|\d{1,4})[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b"
+# ---------------------------------------------------------------------------
+# NATS
+# ---------------------------------------------------------------------------
 
-    # Find all matches in the text
-    phone_numbers = re.findall(pattern, text)
-
-    return phone_numbers
-
-
-def extract_credit_card_numbers(text: str):
-    # Regex pattern for common credit card formats
-    pattern = r"\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{16}\b"
-
-    # Find all matches in the text
-    credit_cards = re.findall(pattern, text)
-
-    # Clean up the results (remove spaces and dashes)
-    cleaned_cards = [re.sub(r"[-\s]", "", card) for card in credit_cards]
-
-    return cleaned_cards
+# NATS subject tokens must not contain '.', '*', '>', or whitespace: '.'
+# changes the routing depth and '*'/'>' are wildcards. These fields originate
+# from bus messages, so an entityId like "x.>" would otherwise let a message
+# publish itself into arbitrary subjects.
+_NATS_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def clean_emails(text: str) -> str:
+def _nats_token(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not _NATS_TOKEN_RE.match(value):
+        raise ValueError(f"Invalid NATS subject token for {field!r}: {value!r}")
+    return value
 
-    # Extract email addresses from the text
-    emails = extract_email_address(text)
-
-    # Remove the email addresses from the text
-    cleaned_text = text
-
-    for email in emails:
-        cleaned_text = cleaned_text.replace(email, "")
-
-    return cleaned_text
-
-
-def clean_phone_numbers(text: str) -> str:
-    # Extract phone numbers from the text
-    phone_numbers = extract_phone_numbers(text)
-
-    # Remove the phone numbers from the text
-    cleaned_text = text
-
-    for phone in phone_numbers:
-        cleaned_text = cleaned_text.replace(phone, "")
-
-    return cleaned_text
-
-
-def clean_credit_card_numbers(text: str) -> str:
-    # Extract credit card numbers from the text
-    credit_cards = extract_credit_card_numbers(text)
-
-    # Remove the credit card numbers from the text
-    cleaned_text = text
-
-    for card in credit_cards:
-        cleaned_text = cleaned_text.replace(card, "")
-
-    return cleaned_text
 
 def compute_dispatch_nats_subject(verified_event: Dict[str, str]) -> str:
-    event_type = verified_event["type"].split(".")[-1]
-    return f"{verified_event['messageType']}.{verified_event['entityType'].replace('_', '-')}.{verified_event['entityId']}.{event_type}"
+    """Compute the dispatch subject for an event, validating every token so
+    event-supplied fields cannot inject '.' separators or NATS wildcards."""
+    try:
+        message_type = verified_event["messageType"]
+        entity_type = verified_event["entityType"].replace("_", "-")
+        entity_id = verified_event["entityId"]
+        event_type = verified_event["type"].split(".")[-1]
+    except KeyError as e:
+        raise ValueError(f"Event is missing required field {e.args[0]!r}") from None
+
+    return ".".join(
+        (
+            _nats_token(message_type, "messageType"),
+            _nats_token(entity_type, "entityType"),
+            _nats_token(entity_id, "entityId"),
+            _nats_token(event_type, "type"),
+        )
+    )
