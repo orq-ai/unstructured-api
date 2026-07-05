@@ -44,6 +44,7 @@ _semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
 # Lifecycle
 # --------------------------------------------------------------------------
 
+
 async def start_nats() -> None:
     logger.info("Starting NATS service...")
     await connect_nats()
@@ -91,7 +92,9 @@ async def connect_nats() -> None:
         logger.warning("NATS disconnected; client will attempt to reconnect")
 
     async def _reconnected_cb() -> None:
-        conn = nats_client.connected_url.netloc if nats_client and nats_client.connected_url else "?"
+        conn = (
+            nats_client.connected_url.netloc if nats_client and nats_client.connected_url else "?"
+        )
         logger.info("NATS reconnected to %s", conn)
 
     async def _error_cb(e: Exception) -> None:
@@ -148,6 +151,7 @@ async def subscribe_nats(subject: str = "command.knowledge.>") -> None:
 # Message handling
 # --------------------------------------------------------------------------
 
+
 async def message_handler(msg: Msg) -> None:
     """Dispatch each message to its own bounded task.
 
@@ -188,9 +192,7 @@ async def _process_message(msg: Msg) -> None:
                     f"markdown exceeds {_MAX_MARKDOWN_BYTES} bytes; refusing to process"
                 )
 
-            partition_params = _sanitize_chunking_options(
-                command.data.get("chunking_options", {})
-            )
+            partition_params = _sanitize_chunking_options(command.data.get("chunking_options", {}))
 
             chunks = await process_markdown_message(markdown, **partition_params)
             logger.info("Generated %d chunks", len(chunks))

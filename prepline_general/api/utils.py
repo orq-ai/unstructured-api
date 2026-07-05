@@ -14,9 +14,7 @@ def _cast_to_type(value: Any, origin_class: type) -> Any:
         try:
             return origin_class(value.strip())
         except ValueError:
-            raise ValueError(
-                f"Cannot cast {value!r} to {origin_class.__name__}"
-            ) from None
+            raise ValueError(f"Cannot cast {value!r} to {origin_class.__name__}") from None
     if origin_class is bool and isinstance(value, str):
         return value.strip().lower() in _TRUTHY_STRINGS
     return value
@@ -101,11 +99,7 @@ class SmartValueParser(Generic[T]):
         """
         origin_class, _ = self._get_origin_container_classes()
         stripped = value.strip()
-        while (
-            len(stripped) >= 2
-            and stripped[0] == stripped[-1]
-            and stripped[0] in ("'", '"')
-        ):
+        while len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ("'", '"'):
             stripped = stripped[1:-1].strip()
         return _cast_to_type(stripped, origin_class)
 
@@ -114,9 +108,7 @@ class SmartValueParser(Generic[T]):
         type parameter."""
         orig_class = getattr(self, "__orig_class__", None)
         if orig_class is None:
-            raise TypeError(
-                "SmartValueParser must be parametrized, e.g. SmartValueParser[int]()"
-            )
+            raise TypeError("SmartValueParser must be parametrized, e.g. SmartValueParser[int]()")
         type_info = orig_class.__args__[0]
         origin_class = get_origin(type_info)
         if origin_class is None:
@@ -129,6 +121,7 @@ class SmartValueParser(Generic[T]):
 # ---------------------------------------------------------------------------
 # Counting helpers
 # ---------------------------------------------------------------------------
+
 
 def count_characters(s: str) -> int:
     """Number of characters in a string."""
@@ -178,9 +171,7 @@ _PHONE_PATTERN = re.compile(
 )
 
 # ISO and day-first/US date shapes the phone pattern would otherwise eat.
-_DATE_LIKE = re.compile(
-    r"^(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})$"
-)
+_DATE_LIKE = re.compile(r"^(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4})$")
 
 # A single-dot decimal like 3.14159265 (real dotted phones have 2+ dots).
 _DECIMAL_LIKE = re.compile(r"^\d+\.\d+$")
@@ -261,9 +252,7 @@ def clean_credit_card_numbers(text: str, replacement: str = "") -> str:
     "redaction" untouched.
     """
     return _CARD_PATTERN.sub(
-        lambda m: replacement
-        if _luhn_valid(re.sub(r"[ -]", "", m.group()))
-        else m.group(),
+        lambda m: replacement if _luhn_valid(re.sub(r"[ -]", "", m.group())) else m.group(),
         text,
     )
 

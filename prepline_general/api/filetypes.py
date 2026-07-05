@@ -22,9 +22,7 @@ _TEXT_COMPATIBLE = {FileType.CSV, FileType.TXT, FileType.HTML}
 # Cap uploads before they reach the parsers. DOCX is a zip container and PDF
 # streams are compressed, so unbounded input is a decompression-bomb /
 # memory-exhaustion vector inside `unstructured`, not just on the wire.
-MAX_UPLOAD_SIZE_BYTES = int(
-    os.environ.get("MAX_UPLOAD_SIZE_BYTES", 50 * 1024 * 1024)
-)
+MAX_UPLOAD_SIZE_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE_BYTES", 50 * 1024 * 1024))
 
 
 def _normalize_mime_type(content_type: str | None) -> str | None:
@@ -65,9 +63,7 @@ def _enforce_size_limit(file: UploadFile) -> None:
     size = f.tell()
     f.seek(0)
     if size == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty."
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
     if size > MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
             status_code=413,  # Content Too Large
@@ -103,9 +99,7 @@ def _reject_binary_masquerading_as_text(file: UploadFile) -> None:
     f.seek(0)
     if b"\x00" in head:
         _raise_unsupported_filetype(None)
-    printable = sum(
-        1 for b in head if b in (0x09, 0x0A, 0x0D) or 0x20 <= b <= 0x7E or b >= 0x80
-    )
+    printable = sum(1 for b in head if b in (0x09, 0x0A, 0x0D) or 0x20 <= b <= 0x7E or b >= 0x80)
     if head and printable / len(head) < 0.95:
         _raise_unsupported_filetype(None)
 
@@ -131,9 +125,7 @@ def get_validated_mimetype_for_filename(
     return _validate_filetype(filetype).mime_type
 
 
-def get_validated_mimetype(
-    file: UploadFile, content_type_hint: str | None = None
-) -> str:
+def get_validated_mimetype(file: UploadFile, content_type_hint: str | None = None) -> str:
     """Identify and return the validated mimetype for an incoming file.
 
     The sniffed content type is authoritative; the filename extension and the
@@ -170,9 +162,7 @@ def get_validated_mimetype(
             _validate_filetype(ext_filetype)
 
     # -- Claim 2: declared MIME type -----------------------------------------
-    declared = _normalize_mime_type(content_type_hint) or _normalize_mime_type(
-        file.content_type
-    )
+    declared = _normalize_mime_type(content_type_hint) or _normalize_mime_type(file.content_type)
     declared_filetype = FileType.from_mime_type(declared) if declared else None
     if declared_filetype is not None and declared_filetype != FileType.UNK:
         _validate_filetype(declared_filetype)
