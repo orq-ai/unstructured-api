@@ -1,0 +1,6 @@
+rules:
+  artipacked:
+    # bump_libraries needs persisted credentials: git-auto-commit-action
+    # pushes the changelog bump back to the dependabot PR branch
+    ignore:
+      - bump_libraries.yaml

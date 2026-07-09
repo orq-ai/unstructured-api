@@ -22,11 +22,13 @@ def send_document(
     content_type: str = "",
     strategy: str = "auto",
     output_format: str = "application/json",
-    skip_infer_table_types: list[str] = [],
+    skip_infer_table_types: Optional[List[str]] = None,
     uncompressed_content_type: str = "",
 ):
     if filenames_gzipped is None:
         filenames_gzipped = []
+    if skip_infer_table_types is None:
+        skip_infer_table_types = []
     files = []
     for filename in filenames:
         files.append(("files", (str(filename), open(filename, "rb"), content_type)))

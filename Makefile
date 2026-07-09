@@ -15,7 +15,7 @@ help: Makefile
 
 ## install-base:                installs minimum requirements to run the API
 .PHONY: install-base
-install-base: install-base-pip-packages install-nltk-models
+install-base: install-base-pip-packages install-models
 
 ## install:                     installs all test and dev requirements
 .PHONY: install
@@ -33,9 +33,10 @@ install-test: install-base
 .PHONY: install-ci
 install-ci: install-test
 
-.PHONY: install-nltk-models
-install-nltk-models:
-	python3 -c "from unstructured.nlp.tokenize import download_nltk_packages; download_nltk_packages()"
+# unstructured >= 0.18 tokenizes via spaCy; NLTK (and its download helper) is gone
+.PHONY: install-models
+install-models:
+	python3 -m spacy download en_core_web_sm
 
 ## pip-compile:                 compiles all base/dev/test requirements
 .PHONY: pip-compile
